@@ -30,6 +30,7 @@ from moon_survival_env import (
 from knowledge_manager import (
     generate_knowledge_assignment,
     knowledge_level_label,
+    format_knowledge_counts,
 )
 from agent import MoonSurvivalAgent
 import config
@@ -170,7 +171,10 @@ def run_iteration(
 # ── Full Experiment ───────────────────────────────────────────────────────────
 
 def run_experiment(
-    knowledge_strategy: List[str],
+    counts: List[int],
+    source: str = "all",
+    overlap: str = "nested",
+    setting: int = 1,
     k: int = 3,
     num_iterations: int = 3,
     num_discussion_rounds: int = 1,
@@ -182,8 +186,10 @@ def run_experiment(
     """Run the full multi-iteration Moon Survival agent teaming experiment.
 
     Args:
-        knowledge_strategy: List of knowledge levels per agent, e.g.
-                            ["none", "quarter", "half"].  Must have 3 elements.
+        counts:             List of 3 integers — items each agent knows [A, B, C].
+        source:             Source pool: "all", "top", or "bottom".
+        overlap:            Overlap pattern: "nested", "disjoint", "O3", "O4".
+        setting:            Experimental setting 1–4 (passed through, wired in Phase 2).
         k:                  Number of candidates per iteration.
         num_iterations:     Number of iterations to run.
         model:              OpenAI model identifier.
@@ -194,13 +200,13 @@ def run_experiment(
     Returns:
         Aggregated experiment log dict.
     """
-    assert len(knowledge_strategy) == 3, "Exactly 3 agents are supported."
+    assert len(counts) == 3, "Exactly 3 agents are supported."
 
     # ── Setup ────────────────────────────────────────────────────────────────
     client = OpenAI(api_key=config.OPENAI_API_KEY)
 
     knowledge_assignments = generate_knowledge_assignment(
-        knowledge_strategy, seed=knowledge_seed
+        counts, source=source, overlap=overlap, seed=knowledge_seed
     )
 
     agents = [
@@ -214,18 +220,22 @@ def run_experiment(
         for i in range(3)
     ]
 
-    strategy_label = "+".join(knowledge_strategy)
+    counts_label = "-".join(str(c) for c in counts)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_id = f"{strategy_label}__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
+    experiment_id = (
+        f"c{counts_label}__{source}__{overlap}__s{setting}"
+        f"__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
+    )
 
     # ── Knowledge dump ───────────────────────────────────────────────────────
-    # Build a serialisable version of knowledge assignments for logging
+    agent_labels = ["A", "B", "C"]
     agent_knowledge_log = []
-    for i, (level, knowledge) in enumerate(zip(knowledge_strategy, knowledge_assignments)):
+    for i, (count, knowledge) in enumerate(zip(counts, knowledge_assignments)):
         agent_entry = {
             "agent_id": i + 1,
-            "level": level,
-            "label": knowledge_level_label(level),
+            "agent_label": agent_labels[i],
+            "count": count,
+            "label": knowledge_level_label(count),
             "items": [
                 {"item": item, "expert_rank": rank, "explanation": expl}
                 for item, rank, expl in knowledge
@@ -236,12 +246,13 @@ def run_experiment(
     if verbose:
         print(f"\n{'#'*60}")
         print(f"  EXPERIMENT: {experiment_id}")
-        print(f"  Knowledge strategy: {[knowledge_level_label(l) for l in knowledge_strategy]}")
+        print(f"  Knowledge: {format_knowledge_counts(counts)}")
+        print(f"  Source: {source}, Overlap: {overlap}, Setting: {setting}")
         print(f"  k={k}, iterations={num_iterations}, model={model}")
         print(f"{'#'*60}")
         print(f"\n  === KNOWLEDGE ASSIGNMENTS ===")
         for entry in agent_knowledge_log:
-            print(f"\n  Agent {entry['agent_id']} [{entry['label']}]:")
+            print(f"\n  Agent {entry['agent_label']} [{entry['label']}]:")
             if entry["items"]:
                 for kv in entry["items"]:
                     print(f"    #{kv['expert_rank']:2d}  {kv['item']}")
@@ -251,7 +262,10 @@ def run_experiment(
 
     experiment_log: Dict[str, Any] = {
         "experiment_id": experiment_id,
-        "knowledge_strategy": knowledge_strategy,
+        "counts": counts,
+        "source": source,
+        "overlap": overlap,
+        "setting": setting,
         "k": k,
         "num_iterations": num_iterations,
         "num_discussion_rounds": num_discussion_rounds,

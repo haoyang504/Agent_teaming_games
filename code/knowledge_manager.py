@@ -3,14 +3,12 @@ Knowledge Manager
 =================
 Handles asymmetric distribution of expert knowledge to each agent.
 
-Knowledge levels
-----------------
-  "full"   → all 15 items
-  "half"   → 8 items (items 0-7 of a fixed shuffle)
-  "quarter" → 4 items (items 0-3 of the same fixed shuffle)
-  "none"   → no expert knowledge
+Three-dimensional knowledge assignment:
+  - counts:  how many items each agent knows (3 configs)
+  - source:  which portion of the ranking pool to draw from (all/top/bottom)
+  - overlap: how knowledge sets relate across agents (nested/disjoint/O3/O4)
 
-All agents that share the same level see the SAME set of items (fixed by seed).
+Agent C (index 2) is always sampled first, then B, then A.
 """
 
 import random
@@ -18,65 +16,111 @@ from typing import Dict, List, Optional, Tuple
 
 from moon_survival_env import ITEMS, GROUND_TRUTH_RANKS, EXPLANATIONS
 
-# ── Knowledge level definitions ──────────────────────────────────────────────
-
-LEVEL_COUNTS: Dict[str, Optional[int]] = {
-    "full":    15,
-    "half":    8,
-    "quarter": 4,
-    "none":    0,
-}
-
-VALID_LEVELS = frozenset(LEVEL_COUNTS.keys())
-
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def generate_knowledge_assignment(
-    levels: List[str],
+    counts: List[int],
+    source: str = "all",
+    overlap: str = "nested",
     seed: int = 42,
 ) -> List[List[Tuple[str, int, str]]]:
-    """Assign fixed knowledge items to each agent based on their experience level.
+    """Assign knowledge items to each agent based on counts, source pool, and overlap pattern.
 
-    Items are chosen from a single shuffled order (fixed by `seed`), so agents
-    sharing the same level always know about the same items.
+    Agent C (index 2) is sampled first, then B (index 1), then A (index 0).
 
     Args:
-        levels: List of knowledge level strings for each agent, e.g.
-                ["none", "quarter", "half"].  Length == number of agents.
-        seed:   Random seed for reproducibility.
+        counts:  List of 3 integers — items each agent knows [A, B, C].
+        source:  "all" (ranks 1–15), "top" (ranks 1–8), "bottom" (ranks 8–15).
+        overlap: "nested" (A⊆B⊆C), "disjoint" (no overlap), "O3", or "O4".
+        seed:    Random seed for reproducibility.
 
     Returns:
-        List (one entry per agent) of knowledge tuples:
-            (item_name, ground_truth_rank, explanation)
-        An agent with "none" level receives an empty list.
+        List of 3 lists of (item_name, ground_truth_rank, explanation) tuples.
 
     Raises:
-        ValueError: if an unknown level string is provided.
+        ValueError: if the configuration is impossible.
     """
-    for lvl in levels:
-        if lvl not in VALID_LEVELS:
+    if len(counts) != 3:
+        raise ValueError(f"counts must have exactly 3 elements, got {len(counts)}")
+
+    rng = random.Random(seed)
+
+    # Build source pool — list of indices into ITEMS
+    pool_indices = _get_source_pool(source)
+    pool_set = set(pool_indices)
+
+    count_a, count_b, count_c = counts
+
+    # Validate total doesn't exceed pool for disjoint
+    if overlap == "disjoint":
+        total_needed = count_a + count_b + count_c
+        if total_needed > len(pool_indices):
             raise ValueError(
-                f"Unknown knowledge level '{lvl}'. Valid levels: {VALID_LEVELS}"
+                f"Disjoint overlap requires {total_needed} items but source "
+                f"pool '{source}' only has {len(pool_indices)} items."
             )
 
-    # Create a fixed shuffled ordering of item indices
-    rng = random.Random(seed)
-    shuffled_indices: List[int] = list(range(len(ITEMS)))
-    rng.shuffle(shuffled_indices)
+    # Sample C first, then B, then A
+    pool_list = list(pool_indices)
 
-    assignments: List[List[Tuple[str, int, str]]] = []
-    for level in levels:
-        count = LEVEL_COUNTS[level]
-        if count == 0:
-            assignments.append([])
-        else:
-            selected_indices = shuffled_indices[:count]
-            knowledge = [
-                (ITEMS[i], GROUND_TRUTH_RANKS[i], EXPLANATIONS[i])
-                for i in selected_indices
-            ]
-            assignments.append(knowledge)
+    if overlap == "nested":
+        # A ⊆ B ⊆ C
+        items_c = _sample(rng, pool_list, count_c)
+        items_b = _sample(rng, items_c, count_b)
+        items_a = _sample(rng, items_b, count_a)
+
+    elif overlap == "disjoint":
+        # No overlap between any pair
+        remaining = list(pool_list)
+        rng.shuffle(remaining)
+        items_c = remaining[:count_c]
+        remaining = remaining[count_c:]
+        items_b = remaining[:count_b]
+        remaining = remaining[count_b:]
+        items_a = remaining[:count_a]
+
+    elif overlap == "O3":
+        # B overlaps C (guaranteed); A disjoint from C
+        items_c = _sample(rng, pool_list, count_c)
+        c_set = set(items_c)
+        non_c = [i for i in pool_list if i not in c_set]
+        if count_a > len(non_c):
+            raise ValueError(
+                f"O3 overlap: need {count_a} items for Agent A disjoint from C, "
+                f"but only {len(non_c)} available."
+            )
+        items_a = _sample(rng, non_c, count_a)
+        # B: guarantee at least 1 item from C, rest from full pool
+        items_b = _sample_with_guaranteed_overlap(rng, pool_list, items_c, count_b)
+
+    elif overlap == "O4":
+        # B disjoint from C; A overlaps C (guaranteed)
+        items_c = _sample(rng, pool_list, count_c)
+        c_set = set(items_c)
+        non_c = [i for i in pool_list if i not in c_set]
+        if count_b > len(non_c):
+            raise ValueError(
+                f"O4 overlap: need {count_b} items for Agent B disjoint from C, "
+                f"but only {len(non_c)} available."
+            )
+        items_b = _sample(rng, non_c, count_b)
+        # A: guarantee at least 1 item from C, rest from full pool
+        items_a = _sample_with_guaranteed_overlap(rng, pool_list, items_c, count_a)
+
+    else:
+        raise ValueError(
+            f"Unknown overlap '{overlap}'. Valid: nested, disjoint, O3, O4"
+        )
+
+    # Build assignments in [A, B, C] order
+    assignments = []
+    for agent_items in [items_a, items_b, items_c]:
+        knowledge = [
+            (ITEMS[i], GROUND_TRUTH_RANKS[i], EXPLANATIONS[i])
+            for i in agent_items
+        ]
+        assignments.append(knowledge)
 
     return assignments
 
@@ -84,14 +128,7 @@ def generate_knowledge_assignment(
 def format_knowledge_for_prompt(
     knowledge: List[Tuple[str, int, str]],
 ) -> str:
-    """Convert an agent's knowledge list into a prompt-friendly string block.
-
-    Args:
-        knowledge: List of (item_name, ground_truth_rank, explanation) tuples.
-
-    Returns:
-        Formatted string, or a note saying the agent has no prior expertise.
-    """
+    """Convert an agent's knowledge list into a prompt-friendly string block."""
     if not knowledge:
         return (
             "You have no specialised prior knowledge about these items — "
@@ -110,12 +147,64 @@ def format_knowledge_for_prompt(
     return "\n".join(lines)
 
 
-def knowledge_level_label(level: str) -> str:
-    """Return a human-readable label for a knowledge level."""
-    labels = {
-        "full":    "Full knowledge (15/15 items)",
-        "half":    "Half knowledge (8/15 items)",
-        "quarter": "Quarter knowledge (4/15 items)",
-        "none":    "No specialised knowledge",
-    }
-    return labels.get(level, level)
+def knowledge_level_label(count: int) -> str:
+    """Return a human-readable label for a knowledge count."""
+    return f"{count}/15 items"
+
+
+def format_knowledge_counts(counts: List[int]) -> str:
+    """Return a human-readable summary of agent knowledge counts."""
+    labels = ["Agent A", "Agent B", "Agent C"]
+    return ", ".join(f"{label}: {count}" for label, count in zip(labels, counts))
+
+
+# ── Internal helpers ─────────────────────────────────────────────────────────
+
+def _get_source_pool(source: str) -> List[int]:
+    """Return list of item indices for the given source pool."""
+    if source == "all":
+        return list(range(len(ITEMS)))
+    elif source == "top":
+        return [i for i in range(len(ITEMS)) if GROUND_TRUTH_RANKS[i] <= 8]
+    elif source == "bottom":
+        return [i for i in range(len(ITEMS)) if GROUND_TRUTH_RANKS[i] >= 8]
+    else:
+        raise ValueError(f"Unknown source '{source}'. Valid: all, top, bottom")
+
+
+def _sample(rng: random.Random, population: List[int], k: int) -> List[int]:
+    """Sample k items from population without replacement. Returns [] if k == 0."""
+    if k == 0:
+        return []
+    if k > len(population):
+        raise ValueError(
+            f"Cannot sample {k} items from a pool of {len(population)}"
+        )
+    return rng.sample(population, k)
+
+
+def _sample_with_guaranteed_overlap(
+    rng: random.Random,
+    pool: List[int],
+    overlap_source: List[int],
+    k: int,
+) -> List[int]:
+    """Sample k items from pool, guaranteeing at least 1 is from overlap_source.
+
+    If k == 0, returns []. If overlap_source is empty or k can't include an
+    overlap item, falls back to plain sampling.
+    """
+    if k == 0:
+        return []
+    if not overlap_source:
+        return _sample(rng, pool, k)
+
+    # Pick 1 guaranteed overlap item
+    shared = rng.sample(overlap_source, 1)
+    if k == 1:
+        return shared
+
+    # Fill remaining from full pool (excluding the guaranteed item)
+    remaining_pool = [i for i in pool if i != shared[0]]
+    rest = _sample(rng, remaining_pool, k - 1)
+    return shared + rest

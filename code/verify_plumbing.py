@@ -19,7 +19,12 @@ from moon_survival_env import (
     format_results_summary,
     MAX_SAD,
 )
-from knowledge_manager import generate_knowledge_assignment, format_knowledge_for_prompt
+from knowledge_manager import (
+    generate_knowledge_assignment,
+    format_knowledge_for_prompt,
+    knowledge_level_label,
+    format_knowledge_counts,
+)
 
 PASS_STR = "  PASS"
 FAIL_STR = "  FAIL"
@@ -100,52 +105,81 @@ check("Two 100-lb oxygen tanks" in summary, "format_results_summary: contains it
 
 print("\n=== knowledge_manager ===\n")
 
-# 10. half knowledge -> 8 items per agent
-half_assignment = generate_knowledge_assignment(["half", "half", "half"])
-for i, agent_know in enumerate(half_assignment):
-    check(len(agent_know) == 8,
-          "Agent {0} half knowledge -> 8 items (got {1})".format(i + 1, len(agent_know)))
+# 10. Config 1 [0, 2, 4] — correct counts
+cfg1 = generate_knowledge_assignment([0, 2, 4], seed=42)
+check(len(cfg1[0]) == 0, "Config 1: Agent A -> 0 items (got {0})".format(len(cfg1[0])))
+check(len(cfg1[1]) == 2, "Config 1: Agent B -> 2 items (got {0})".format(len(cfg1[1])))
+check(len(cfg1[2]) == 4, "Config 1: Agent C -> 4 items (got {0})".format(len(cfg1[2])))
 
-# 11. quarter knowledge -> 4 items per agent
-quarter_assignment = generate_knowledge_assignment(["quarter", "quarter", "quarter"])
-for i, agent_know in enumerate(quarter_assignment):
-    check(len(agent_know) == 4,
-          "Agent {0} quarter knowledge -> 4 items (got {1})".format(i + 1, len(agent_know)))
+# 11. Config 2 [1, 2, 3] — correct counts
+cfg2 = generate_knowledge_assignment([1, 2, 3], seed=42)
+check(len(cfg2[0]) == 1, "Config 2: Agent A -> 1 item (got {0})".format(len(cfg2[0])))
+check(len(cfg2[1]) == 2, "Config 2: Agent B -> 2 items (got {0})".format(len(cfg2[1])))
+check(len(cfg2[2]) == 3, "Config 2: Agent C -> 3 items (got {0})".format(len(cfg2[2])))
 
-# 12. none knowledge -> 0 items
-none_assignment = generate_knowledge_assignment(["none"])
-check(none_assignment[0] == [], "none knowledge -> empty list")
+# 12. Config 3 [2, 2, 2] — correct counts
+cfg3 = generate_knowledge_assignment([2, 2, 2], seed=42)
+for i in range(3):
+    check(len(cfg3[i]) == 2, "Config 3: Agent {0} -> 2 items (got {1})".format(i, len(cfg3[i])))
 
-# 13. Same level -> same items
-a1_half = generate_knowledge_assignment(["half"], seed=42)[0]
-a2_half = generate_knowledge_assignment(["half"], seed=42)[0]
-check(a1_half == a2_half, "Same level+seed -> identical knowledge")
+# 13. Nested overlap: A ⊆ B ⊆ C
+nested = generate_knowledge_assignment([1, 2, 3], "all", "nested", seed=42)
+items_a = set(item for item, _, _ in nested[0])
+items_b = set(item for item, _, _ in nested[1])
+items_c = set(item for item, _, _ in nested[2])
+check(items_a <= items_b, "Nested: A ⊆ B")
+check(items_b <= items_c, "Nested: B ⊆ C")
 
-# 14. Different seeds -> different items
-a1_seed1 = generate_knowledge_assignment(["half"], seed=1)[0]
-a1_seed2 = generate_knowledge_assignment(["half"], seed=2)[0]
+# 14. Disjoint overlap: no overlap
+disjoint = generate_knowledge_assignment([1, 2, 3], "all", "disjoint", seed=42)
+items_a = set(item for item, _, _ in disjoint[0])
+items_b = set(item for item, _, _ in disjoint[1])
+items_c = set(item for item, _, _ in disjoint[2])
+check(items_a & items_b == set(), "Disjoint: A ∩ B = ∅")
+check(items_a & items_c == set(), "Disjoint: A ∩ C = ∅")
+check(items_b & items_c == set(), "Disjoint: B ∩ C = ∅")
+
+# 15. Same seed -> same items
+a1 = generate_knowledge_assignment([2, 2, 2], seed=42)
+a2 = generate_knowledge_assignment([2, 2, 2], seed=42)
+check(a1 == a2, "Same counts+seed -> identical knowledge")
+
+# 16. Different seeds -> different items
+a1_seed1 = generate_knowledge_assignment([2, 2, 2], seed=1)
+a1_seed2 = generate_knowledge_assignment([2, 2, 2], seed=2)
 check(a1_seed1 != a1_seed2, "Different seeds -> different knowledge sets")
 
-# 15. Mixed strategies (none, quarter, half)
-mixed = generate_knowledge_assignment(["none", "quarter", "half"])
-check(len(mixed[0]) == 0, "Mixed: agent 1 = none -> 0 items")
-check(len(mixed[1]) == 4, "Mixed: agent 2 = quarter -> 4 items")
-check(len(mixed[2]) == 8, "Mixed: agent 3 = half -> 8 items")
+# 17. Source filtering — top
+top = generate_knowledge_assignment([2, 2, 4], "top", "disjoint", seed=42)
+for i, agent_know in enumerate(top):
+    for item, rank, _ in agent_know:
+        check(rank <= 8, "Source=top: Agent {0} item '{1}' rank {2} <= 8".format(i, item, rank))
 
-# 16. quarter items are a subset of half items (same seed)
-half_items = set(item for item, _, _ in generate_knowledge_assignment(["half"], seed=42)[0])
-quarter_items = set(item for item, _, _ in generate_knowledge_assignment(["quarter"], seed=42)[0])
-check(quarter_items.issubset(half_items), "quarter items are subset of half items (same seed)")
+# 18. Source filtering — bottom
+bottom = generate_knowledge_assignment([2, 2, 4], "bottom", "disjoint", seed=42)
+for i, agent_know in enumerate(bottom):
+    for item, rank, _ in agent_know:
+        check(rank >= 8, "Source=bottom: Agent {0} item '{1}' rank {2} >= 8".format(i, item, rank))
 
-# 17. format_knowledge_for_prompt for none
+# 19. format_knowledge_for_prompt for empty
 prompt_none = format_knowledge_for_prompt([])
-check("no specialised" in prompt_none.lower(), "format_knowledge_for_prompt: none -> appropriate message")
+check("no specialised" in prompt_none.lower(), "format_knowledge_for_prompt: empty -> appropriate message")
 
-# 18. format_knowledge_for_prompt for half contains item names
-half_knowledge = generate_knowledge_assignment(["half"])[0]
-prompt_half = format_knowledge_for_prompt(half_knowledge)
-first_item_name = half_knowledge[0][0]
-check(first_item_name in prompt_half, "format_knowledge_for_prompt: half contains item name")
+# 20. format_knowledge_for_prompt contains item names
+knowledge_items = generate_knowledge_assignment([4, 4, 4], seed=42)[0]
+prompt = format_knowledge_for_prompt(knowledge_items)
+first_item_name = knowledge_items[0][0]
+check(first_item_name in prompt, "format_knowledge_for_prompt: contains item name")
+
+# 21. knowledge_level_label
+check(knowledge_level_label(4) == "4/15 items", "knowledge_level_label(4) = '4/15 items'")
+check(knowledge_level_label(0) == "0/15 items", "knowledge_level_label(0) = '0/15 items'")
+
+# 22. format_knowledge_counts
+check(
+    format_knowledge_counts([0, 2, 4]) == "Agent A: 0, Agent B: 2, Agent C: 4",
+    "format_knowledge_counts([0, 2, 4])"
+)
 
 # -- Report --
 print("\n" + "-" * 40)

@@ -5,14 +5,14 @@ Main entry point for running Moon Survival agent teaming experiments.
 
 Usage examples
 --------------
-# Run all 4 predefined strategies (k=3, 3 iterations):
-    python run_experiment.py
+# Run a named config:
+    python run_experiment.py --config high_div --setting 1 --k 3 --iterations 3
 
-# Run a specific strategy:
-    python run_experiment.py --strategy none+quarter+half --k 3 --iterations 3
+# Run with custom parameters:
+    python run_experiment.py --counts 1,2,3 --source top --overlap disjoint --setting 1
 
 # Quick single-iteration sanity check:
-    python run_experiment.py --strategy none+quarter+half --k 1 --iterations 1
+    python run_experiment.py --config high_div --setting 1 --k 1 --iterations 1 --discussion-rounds 1
 """
 
 import argparse
@@ -21,12 +21,23 @@ import sys
 
 from experiment_runner import run_experiment
 
-# ── Predefined knowledge strategy sets ────────────────────────────────────────
-STRATEGIES = {
-    "ascending":     ["none", "quarter", "half"],    # [None, 1/4, 1/2]
-    "descending":    ["half", "half", "none"],        # [1/2, 1/2, None]
-    "all_half":      ["half", "half", "half"],        # [1/2, 1/2, 1/2]
-    "all_quarter":   ["quarter", "quarter", "quarter"],  # [1/4, 1/4, 1/4]
+# ── Predefined configurations (3 configs × 4 overlaps = 12 core conditions) ──
+CONFIGS = {
+    # Config 1: High diversity [0, 2, 4]
+    "high_div":          {"counts": [0, 2, 4], "source": "all", "overlap": "nested"},
+    "high_div_disjoint": {"counts": [0, 2, 4], "source": "all", "overlap": "disjoint"},
+    "high_div_O3":       {"counts": [0, 2, 4], "source": "all", "overlap": "O3"},
+    "high_div_O4":       {"counts": [0, 2, 4], "source": "all", "overlap": "O4"},
+    # Config 2: Medium diversity [1, 2, 3]
+    "med_div":           {"counts": [1, 2, 3], "source": "all", "overlap": "nested"},
+    "med_div_disjoint":  {"counts": [1, 2, 3], "source": "all", "overlap": "disjoint"},
+    "med_div_O3":        {"counts": [1, 2, 3], "source": "all", "overlap": "O3"},
+    "med_div_O4":        {"counts": [1, 2, 3], "source": "all", "overlap": "O4"},
+    # Config 3: Low diversity [2, 2, 2]
+    "low_div":           {"counts": [2, 2, 2], "source": "all", "overlap": "nested"},
+    "low_div_disjoint":  {"counts": [2, 2, 2], "source": "all", "overlap": "disjoint"},
+    "low_div_O3":        {"counts": [2, 2, 2], "source": "all", "overlap": "O3"},
+    "low_div_O4":        {"counts": [2, 2, 2], "source": "all", "overlap": "O4"},
 }
 
 
@@ -35,14 +46,40 @@ def main() -> None:
         description="Run the Moon Survival Agent Teaming Experiment."
     )
     parser.add_argument(
-        "--strategy",
+        "--config",
         type=str,
         default=None,
         help=(
-            "Knowledge strategy as a '+'-separated list of 3 levels "
-            "(none|quarter|half|full), e.g. 'none+quarter+half'. "
-            "If omitted, all 4 predefined strategies are run sequentially."
+            "Named configuration from CONFIGS (e.g. 'high_div', 'med_div_disjoint'). "
+            "Use --counts for fully custom runs."
         ),
+    )
+    parser.add_argument(
+        "--counts",
+        type=str,
+        default=None,
+        help="Comma-separated item counts for [A,B,C], e.g. '0,2,4'.",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        choices=["all", "top", "bottom"],
+        help="Source pool override (default: 'all'). Values: all, top, bottom.",
+    )
+    parser.add_argument(
+        "--overlap",
+        type=str,
+        default=None,
+        choices=["nested", "disjoint", "O3", "O4"],
+        help="Overlap pattern override (default: 'nested'). Values: nested, disjoint, O3, O4.",
+    )
+    parser.add_argument(
+        "--setting",
+        type=int,
+        default=1,
+        choices=[1, 2, 3, 4],
+        help="Experimental setting 1–4 (default: 1). Wired up in Phase 2.",
     )
     parser.add_argument(
         "--k",
@@ -80,36 +117,53 @@ def main() -> None:
         default=1,
         help=(
             "Number of discussion rounds per iteration (default: 1). "
-            "Each round = all 3 agents speak once (1->2->3)."
+            "Each round = all 3 agents speak once."
         ),
     )
     args = parser.parse_args()
 
-    # ── Resolve strategies ─────────────────────────────────────────────────
-    if args.strategy:
-        parts = args.strategy.split("+")
+    # ── Resolve configuration ─────────────────────────────────────────────
+    if args.counts:
+        # Custom counts specified
+        parts = args.counts.split(",")
         if len(parts) != 3:
-            print("ERROR: --strategy must contain exactly 3 levels separated by '+'.")
+            print("ERROR: --counts must be exactly 3 comma-separated integers.")
             sys.exit(1)
-        strategies_to_run = {"custom": parts}
+        counts = [int(p.strip()) for p in parts]
+        source = args.source or "all"
+        overlap = args.overlap or "nested"
+    elif args.config:
+        if args.config not in CONFIGS:
+            print(f"ERROR: Unknown config '{args.config}'. Available: {list(CONFIGS.keys())}")
+            sys.exit(1)
+        cfg = CONFIGS[args.config]
+        counts = cfg["counts"]
+        source = args.source or cfg["source"]
+        overlap = args.overlap or cfg["overlap"]
     else:
-        strategies_to_run = STRATEGIES
+        # Default to high_div
+        cfg = CONFIGS["high_div"]
+        counts = cfg["counts"]
+        source = args.source or cfg["source"]
+        overlap = args.overlap or cfg["overlap"]
 
     # ── Run ──────────────────────────────────────────────────────────────────
-    for name, levels in strategies_to_run.items():
-        print(f"\n\n{'#'*70}")
-        print(f"  Strategy: {name}  ({levels})")
-        print(f"{'#'*70}")
-        run_experiment(
-            knowledge_strategy=levels,
-            k=args.k,
-            num_iterations=args.iterations,
-            num_discussion_rounds=args.discussion_rounds,
-            model=args.model,
-            knowledge_seed=args.seed,
-            output_dir=args.output_dir,
-            verbose=True,
-        )
+    print(f"\n\n{'#'*70}")
+    print(f"  Config: counts={counts}, source={source}, overlap={overlap}, setting={args.setting}")
+    print(f"{'#'*70}")
+    run_experiment(
+        counts=counts,
+        source=source,
+        overlap=overlap,
+        setting=args.setting,
+        k=args.k,
+        num_iterations=args.iterations,
+        num_discussion_rounds=args.discussion_rounds,
+        model=args.model,
+        knowledge_seed=args.seed,
+        output_dir=args.output_dir,
+        verbose=True,
+    )
 
 
 if __name__ == "__main__":
