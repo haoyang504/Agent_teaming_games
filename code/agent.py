@@ -45,16 +45,22 @@ def _chat(
 
 # ── Agent ────────────────────────────────────────────────────────────────────
 
+_ID_TO_LABEL = {1: "A", 2: "B", 3: "C"}
+
+
 class MoonSurvivalAgent:
     """A single agent in the Moon Survival team.
 
     Args:
-        agent_id:   1-indexed integer identifier.
-        knowledge:  List of (item_name, ground_truth_rank, explanation) tuples
-                    representing the agent's specialised expertise.
-        client:     Initialised OpenAI client.
-        model:      Model identifier string (e.g. "gpt-4o-mini").
-        num_agents  Total number of agents in the team.
+        agent_id:             1-indexed integer identifier.
+        knowledge:            List of (item_name, ground_truth_rank, explanation) tuples
+                              representing the agent's specialised expertise.
+        client:               Initialised OpenAI client.
+        model:                Model identifier string (e.g. "gpt-4o-mini").
+        num_agents:           Total number of agents in the team.
+        team_knowledge_info:  Dict mapping agent labels to knowledge counts,
+                              e.g. {"A": 0, "B": 2, "C": 4}. None = not provided.
+        leader_id:            agent_id of the designated leader (e.g. 3). None = no leader.
     """
 
     def __init__(
@@ -64,12 +70,16 @@ class MoonSurvivalAgent:
         client: OpenAI,
         model: str = "gpt-4o-mini",
         num_agents: int = 3,
+        team_knowledge_info: Optional[Dict[str, int]] = None,
+        leader_id: Optional[int] = None,
     ) -> None:
         self.agent_id = agent_id
         self.knowledge = knowledge
         self.client = client
         self.model = model
         self.num_agents = num_agents
+        self.team_knowledge_info = team_knowledge_info
+        self.leader_id = leader_id
 
     # ── System prompt ───────────────────────────────────────────────────────
 
@@ -81,6 +91,30 @@ class MoonSurvivalAgent:
         others_str = " and ".join(other_ids)
         knowledge_block = format_knowledge_for_prompt(self.knowledge)
 
+        # Build optional sections
+        team_info_section = ""
+        if self.team_knowledge_info is not None:
+            lines = []
+            for label in ("A", "B", "C"):
+                count = self.team_knowledge_info.get(label, 0)
+                if count == 0:
+                    lines.append(f"- Agent {label} has no specialised knowledge.")
+                else:
+                    lines.append(f"- Agent {label} knows about {count} of the 15 items.")
+            team_info_section = (
+                "\n=== TEAM INFORMATION ===\n"
+                "Your team members have the following levels of specialised knowledge:\n"
+                + "\n".join(lines) + "\n"
+            )
+
+        role_section = ""
+        if self.leader_id is not None:
+            leader_label = _ID_TO_LABEL.get(self.leader_id, str(self.leader_id))
+            role_section = (
+                "\n=== TEAM ROLE ===\n"
+                f"Agent {leader_label} has been designated as the team leader.\n"
+            )
+
         return f"""You are Agent {self.agent_id} in a team of {self.num_agents} agents ({others_str} and you) solving the NASA Moon Survival ranking task.
 
 === TASK CONTEXT ===
@@ -91,7 +125,7 @@ You are a member of a space crew who crash-landed on the sunlit side of the Moon
 
 === YOUR SPECIALISED KNOWLEDGE ===
 {knowledge_block}
-
+{team_info_section}{role_section}
 === SCORING ===
 Rankings are evaluated by Sum of Absolute Differences (SAD) compared to the NASA expert ranking. Lower is better; 0 is a perfect score.
 

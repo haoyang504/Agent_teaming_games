@@ -181,6 +181,86 @@ check(
     "format_knowledge_counts([0, 2, 4])"
 )
 
+print("\n=== agent.py — Setting prompts ===\n")
+
+from agent import MoonSurvivalAgent
+
+# 23. Setting 1: no team info, no leader in prompt
+agent_s1 = MoonSurvivalAgent(
+    agent_id=1,
+    knowledge=[("Two 100-lb oxygen tanks", 1, "Oxygen is needed.")],
+    client=None,
+    model="test",
+    num_agents=3,
+    team_knowledge_info=None,
+    leader_id=None,
+)
+prompt_s1 = agent_s1._system_prompt()
+check("TEAM INFORMATION" not in prompt_s1, "Setting 1: no team info in prompt")
+check("TEAM ROLE" not in prompt_s1, "Setting 1: no leader in prompt")
+
+# 24. Setting 2: team info present, no leader
+agent_s2 = MoonSurvivalAgent(
+    agent_id=1,
+    knowledge=[("Two 100-lb oxygen tanks", 1, "Oxygen is needed.")],
+    client=None,
+    model="test",
+    num_agents=3,
+    team_knowledge_info={"A": 0, "B": 2, "C": 4},
+    leader_id=None,
+)
+prompt_s2 = agent_s2._system_prompt()
+check("TEAM INFORMATION" in prompt_s2, "Setting 2: team info present")
+check("TEAM ROLE" not in prompt_s2, "Setting 2: no leader in prompt")
+check("Agent A" in prompt_s2 and "0" in prompt_s2, "Setting 2: Agent A count in prompt")
+check("Agent C" in prompt_s2 and "4" in prompt_s2, "Setting 2: Agent C count in prompt")
+
+# 25. Setting 3: no team info, leader present
+agent_s3 = MoonSurvivalAgent(
+    agent_id=2,
+    knowledge=[("20 liters of water", 2, "Water is critical.")],
+    client=None,
+    model="test",
+    num_agents=3,
+    team_knowledge_info=None,
+    leader_id=3,
+)
+prompt_s3 = agent_s3._system_prompt()
+check("TEAM INFORMATION" not in prompt_s3, "Setting 3: no team info")
+check("TEAM ROLE" in prompt_s3, "Setting 3: leader present")
+check("Agent C" in prompt_s3 and "leader" in prompt_s3.lower(), "Setting 3: Agent C is leader")
+
+# 26. Setting 4: both present
+agent_s4 = MoonSurvivalAgent(
+    agent_id=1,
+    knowledge=[],
+    client=None,
+    model="test",
+    num_agents=3,
+    team_knowledge_info={"A": 0, "B": 2, "C": 4},
+    leader_id=3,
+)
+prompt_s4 = agent_s4._system_prompt()
+check("TEAM INFORMATION" in prompt_s4, "Setting 4: team info present")
+check("TEAM ROLE" in prompt_s4, "Setting 4: leader present")
+
+# 27. Team info and role sections are neutral (no instructional language)
+# Extract only the TEAM INFORMATION and TEAM ROLE sections for checking
+def extract_setting_sections(prompt):
+    sections = ""
+    for header in ["=== TEAM INFORMATION ===", "=== TEAM ROLE ==="]:
+        if header in prompt:
+            start = prompt.index(header)
+            end = prompt.index("===", start + len(header))
+            sections += prompt[start:end]
+    return sections.lower()
+
+s2_sections = extract_setting_sections(prompt_s2)
+s4_sections = extract_setting_sections(prompt_s4)
+for bad_phrase in ["defer to", "act based on", "follow the leader", "consider this when", "use this information"]:
+    check(bad_phrase not in s2_sections, "Setting 2: no instructional phrase '{0}' in team sections".format(bad_phrase))
+    check(bad_phrase not in s4_sections, "Setting 4: no instructional phrase '{0}' in team sections".format(bad_phrase))
+
 # -- Report --
 print("\n" + "-" * 40)
 if errors == 0:

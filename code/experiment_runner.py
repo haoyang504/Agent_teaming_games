@@ -209,6 +209,20 @@ def run_experiment(
         counts, source=source, overlap=overlap, seed=knowledge_seed
     )
 
+    # ── Compute setting-dependent info ───────────────────────────────────
+    team_knowledge_info = None
+    leader_id = None
+
+    if setting in (2, 4):
+        team_knowledge_info = {
+            "A": counts[0],
+            "B": counts[1],
+            "C": counts[2],
+        }
+
+    if setting in (3, 4):
+        leader_id = 3
+
     agents = [
         MoonSurvivalAgent(
             agent_id=i + 1,
@@ -216,6 +230,8 @@ def run_experiment(
             client=client,
             model=model,
             num_agents=3,
+            team_knowledge_info=team_knowledge_info,
+            leader_id=leader_id,
         )
         for i in range(3)
     ]
@@ -258,6 +274,12 @@ def run_experiment(
                     print(f"    #{kv['expert_rank']:2d}  {kv['item']}")
             else:
                 print(f"    (no specialised knowledge)")
+        if setting >= 2:
+            print(f"\n  Team info provided: {team_knowledge_info is not None}")
+            if leader_id:
+                print(f"  Leader designated: Agent C (id={leader_id})")
+            else:
+                print(f"  No leader designated")
         print(f"\n{'#'*60}")
 
     experiment_log: Dict[str, Any] = {
@@ -266,6 +288,8 @@ def run_experiment(
         "source": source,
         "overlap": overlap,
         "setting": setting,
+        "team_knowledge_info": team_knowledge_info,
+        "leader_id": leader_id,
         "k": k,
         "num_iterations": num_iterations,
         "num_discussion_rounds": num_discussion_rounds,
