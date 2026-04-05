@@ -42,13 +42,14 @@ def _chat(
             temperature=temperature,
         )
     except Exception as e:
-        if "temperature" in str(e).lower():
+        # Retry without temperature — some providers/models don't support it
+        try:
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
             )
-        else:
-            raise
+        except Exception:
+            raise e  # If it still fails, raise the original error
     return response.choices[0].message.content.strip()
 
 
