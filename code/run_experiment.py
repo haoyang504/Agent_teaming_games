@@ -96,8 +96,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-mini",
-        help="OpenAI model to use (default: gpt-4o-mini).",
+        default="gpt-5-mini",
+        help="OpenAI model to use (default: gpt-5-mini).",
     )
     parser.add_argument(
         "--seed",
