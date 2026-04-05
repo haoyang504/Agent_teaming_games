@@ -35,11 +35,20 @@ def _chat(
     temperature: float = 0.7,
 ) -> str:
     """Thin wrapper around OpenAI chat completion."""
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+        )
+    except Exception as e:
+        if "temperature" in str(e).lower():
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+        else:
+            raise
     return response.choices[0].message.content.strip()
 
 
@@ -200,9 +209,36 @@ Use EXACT item names from the list above.
             {"role": "system", "content": self._system_prompt()},
             {"role": "user",   "content": user_msg},
         ]
-        raw = _chat(self.client, self.model, messages)
-        candidates = _parse_k_candidates(raw, k)
-        return candidates, raw
+
+        last_error: Optional[Exception] = None
+        raw = ""
+        for attempt in range(3):
+            raw = _chat(self.client, self.model, messages)
+            try:
+                candidates = _parse_k_candidates(raw, k)
+                return candidates, raw
+            except ValueError as e:
+                last_error = e
+                print(
+                    f"  [propose_candidates] Parse failed (attempt {attempt+1}/3): {e}"
+                )
+                messages = messages + [
+                    {"role": "assistant", "content": raw},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your response could not be fully parsed: {e}\n\n"
+                            "Please try again. Make sure to:\n"
+                            "1. Include ALL 15 items in every ranking.\n"
+                            f"2. Start each ranking block with the EXACT header "
+                            f"'CANDIDATE <n> RANKING:'\n"
+                            "3. Use the exact item names listed above."
+                        ),
+                    },
+                ]
+        raise ValueError(
+            f"Failed to parse proposal candidates after 3 attempts. Last error: {last_error}"
+        )
 
     # ── Step 2 : Discussion ─────────────────────────────────────────────────
 
