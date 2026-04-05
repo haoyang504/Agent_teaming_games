@@ -158,7 +158,112 @@ def format_knowledge_counts(counts: List[int]) -> str:
     return ", ".join(f"{label}: {count}" for label, count in zip(labels, counts))
 
 
+def generate_incorrect_ranking(seed: int = 99) -> List[Tuple[str, int, str]]:
+    """Generate a fully incorrect ranking where no item-rank pair matches ground truth.
+
+    Args:
+        seed: Random seed for reproducibility.
+
+    Returns:
+        List of 15 (item_name, incorrect_rank, incorrect_explanation) tuples.
+    """
+    rng = random.Random(seed)
+    n = len(ITEMS)
+    incorrect_ranks = _derangement(rng, n)
+    explanation = (
+        "Based on preliminary analysis, this item has been assessed at this priority level."
+    )
+    return [
+        (ITEMS[i], incorrect_ranks[i], explanation)
+        for i in range(n)
+    ]
+
+
+def generate_mixed_knowledge_assignment(
+    counts: List[int],
+    incorrect_pattern: str,
+    seed: int = 42,
+    incorrect_seed: int = 99,
+) -> Tuple[List[List[Tuple[str, int, str]]], List[List[Tuple[str, int, str]]]]:
+    """Generate correct + incorrect knowledge for each agent.
+
+    Fixed to: source="all", overlap="disjoint".
+
+    Args:
+        counts:            [A, B, C] item counts.
+        incorrect_pattern: "I1", "I2", "I3", or "I4".
+        seed:              Seed for correct knowledge assignment.
+        incorrect_seed:    Seed for incorrect ranking generation.
+
+    Returns:
+        Tuple of (correct_assignments, incorrect_assignments).
+    """
+    correct_assignments = generate_knowledge_assignment(
+        counts, source="all", overlap="disjoint", seed=seed
+    )
+    incorrect_ranking = generate_incorrect_ranking(seed=incorrect_seed)
+
+    if incorrect_pattern == "I1":
+        incorrect_counts = [1, 0, 0]
+    elif incorrect_pattern == "I2":
+        incorrect_counts = [0, 1, 0]
+    elif incorrect_pattern == "I3":
+        incorrect_counts = [0, 0, 1]
+    elif incorrect_pattern == "I4":
+        if counts[0] == 0:
+            incorrect_counts = [0, 1, 2]
+        else:
+            incorrect_counts = [1, 1, 1]
+    else:
+        raise ValueError(f"Unknown incorrect_pattern '{incorrect_pattern}'. Valid: I1, I2, I3, I4")
+
+    rng = random.Random(seed + incorrect_seed)
+    incorrect_assignments = []
+    for i in range(3):
+        agent_incorrect = _sample_incorrect_for_agent(
+            rng, incorrect_ranking, correct_assignments[i], incorrect_counts[i]
+        )
+        incorrect_assignments.append(agent_incorrect)
+
+    return correct_assignments, incorrect_assignments
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────────
+
+def _derangement(rng: random.Random, n: int) -> List[int]:
+    """Generate a random derangement of [1..n] (no fixed points)."""
+    while True:
+        perm = list(range(1, n + 1))
+        rng.shuffle(perm)
+        if all(perm[i] != i + 1 for i in range(n)):
+            return perm
+
+
+def _sample_incorrect_for_agent(
+    rng: random.Random,
+    incorrect_ranking: List[Tuple[str, int, str]],
+    correct_knowledge: List[Tuple[str, int, str]],
+    count: int,
+) -> List[Tuple[str, int, str]]:
+    """Sample incorrect items for one agent, avoiding overlap with their correct knowledge."""
+    if count == 0:
+        return []
+
+    correct_items = {item for item, _, _ in correct_knowledge}
+    correct_ranks = {rank for _, rank, _ in correct_knowledge}
+
+    eligible = [
+        (item, rank, expl) for item, rank, expl in incorrect_ranking
+        if item not in correct_items and rank not in correct_ranks
+    ]
+
+    if len(eligible) < count:
+        raise ValueError(
+            f"Cannot find {count} non-overlapping incorrect items. "
+            f"Only {len(eligible)} eligible after filtering."
+        )
+
+    return rng.sample(eligible, count)
 
 def _get_source_pool(source: str) -> List[int]:
     """Return list of item indices for the given source pool."""

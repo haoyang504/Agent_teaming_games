@@ -61,6 +61,7 @@ class MoonSurvivalAgent:
         team_knowledge_info:  Dict mapping agent labels to knowledge counts,
                               e.g. {"A": 0, "B": 2, "C": 4}. None = not provided.
         leader_id:            agent_id of the designated leader (e.g. 3). None = no leader.
+        knowledge_warning:    If True, add a warning that some knowledge may be incorrect.
     """
 
     def __init__(
@@ -72,6 +73,7 @@ class MoonSurvivalAgent:
         num_agents: int = 3,
         team_knowledge_info: Optional[Dict[str, int]] = None,
         leader_id: Optional[int] = None,
+        knowledge_warning: bool = False,
     ) -> None:
         self.agent_id = agent_id
         self.knowledge = knowledge
@@ -80,6 +82,7 @@ class MoonSurvivalAgent:
         self.num_agents = num_agents
         self.team_knowledge_info = team_knowledge_info
         self.leader_id = leader_id
+        self.knowledge_warning = knowledge_warning
 
     # ── System prompt ───────────────────────────────────────────────────────
 
@@ -90,6 +93,10 @@ class MoonSurvivalAgent:
         ]
         others_str = " and ".join(other_ids)
         knowledge_block = format_knowledge_for_prompt(self.knowledge)
+        if self.knowledge_warning:
+            knowledge_block += (
+                "\n\nNote: Some of the knowledge you have received may be incorrect."
+            )
 
         # Build optional sections
         team_info_section = ""
@@ -142,6 +149,7 @@ Rankings are evaluated by Sum of Absolute Differences (SAD) compared to the NASA
         self,
         k: int,
         previous_results: Optional[str] = None,
+        results_context: str = "the previous iteration",
     ) -> Tuple[List[Dict[str, int]], str]:
         """Generate k candidate rankings based on the previous iteration results.
 
@@ -149,6 +157,7 @@ Rankings are evaluated by Sum of Absolute Differences (SAD) compared to the NASA
             k:                Number of candidates to propose.
             previous_results: Formatted string of previous candidates + scores,
                               or None for the very first iteration.
+            results_context:  Human-readable description of what the results cover.
 
         Returns:
             Tuple of:
@@ -157,7 +166,7 @@ Rankings are evaluated by Sum of Absolute Differences (SAD) compared to the NASA
         """
         if previous_results:
             context = (
-                f"Here are the results from the previous iteration:\n\n"
+                f"Here are the results from {results_context}:\n\n"
                 f"{previous_results}\n\n"
                 "Study these results carefully. You are NOT limited to building "
                 "on any single previous candidate — you may combine insights "

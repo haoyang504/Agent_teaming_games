@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,6 +30,7 @@ from moon_survival_env import (
 )
 from knowledge_manager import (
     generate_knowledge_assignment,
+    generate_mixed_knowledge_assignment,
     knowledge_level_label,
     format_knowledge_counts,
 )
@@ -45,16 +47,20 @@ def run_iteration(
     previous_candidates: Optional[List[Dict[str, int]]],
     previous_scores: Optional[List[int]],
     num_discussion_rounds: int = 1,
+    discussion_seed: Optional[int] = None,
+    results_context: str = "the previous iteration",
     verbose: bool = True,
 ) -> Tuple[List[Dict[str, int]], List[int], Dict[str, Any]]:
     """Run a single iteration of the agent teaming experiment.
 
     Args:
-        agents:               List of MoonSurvivalAgent instances (order = round-robin order).
+        agents:               List of MoonSurvivalAgent instances.
         k:                    Number of candidates to propose / select.
         iteration:            Current iteration number (1-indexed).
         previous_candidates:  Candidates from the prior iteration (None = first iter).
         previous_scores:      SAD scores corresponding to previous_candidates.
+        discussion_seed:      Seed for reproducible discussion order shuffling.
+        results_context:      Human-readable label for what the feedback covers.
         verbose:              If True, print progress to stdout.
 
     Returns:
@@ -63,10 +69,14 @@ def run_iteration(
           - final_scores:      Corresponding SAD scores.
           - log:               Dict capturing all prompts, responses, and scores.
     """
+    disc_rng = random.Random(discussion_seed) if discussion_seed is not None else random.Random()
+
     log: Dict[str, Any] = {
         "iteration": iteration,
+        "feedback_provided": previous_candidates is not None,
         "proposals": [],
         "discussion": [],
+        "discussion_orders": {},
         "final_selection": None,
         "final_scores": [],
     }
@@ -88,7 +98,7 @@ def run_iteration(
     for agent in agents:
         if verbose:
             print(f"\n  Agent {agent.agent_id} proposing {k} candidate(s)...")
-        candidates, raw = agent.propose_candidates(k, prev_summary)
+        candidates, raw = agent.propose_candidates(k, prev_summary, results_context=results_context)
         all_proposals[agent.agent_id] = candidates
 
         proposal_entry = {
@@ -115,9 +125,16 @@ def run_iteration(
         print(f"{'='*60}")
 
     for disc_round in range(1, num_discussion_rounds + 1):
-        if verbose and num_discussion_rounds > 1:
-            print(f"\n  -- Discussion Round {disc_round}/{num_discussion_rounds} --")
-        for agent in agents:
+        # Shuffle speaking order for this round
+        round_order = list(agents)
+        disc_rng.shuffle(round_order)
+        log["discussion_orders"][disc_round] = [a.agent_id for a in round_order]
+
+        if verbose:
+            order_str = " → ".join(str(a.agent_id) for a in round_order)
+            print(f"\n  -- Discussion Round {disc_round}/{num_discussion_rounds} (order: {order_str}) --")
+
+        for agent in round_order:
             if verbose:
                 print(f"\n  Agent {agent.agent_id} discussing (round {disc_round})...")
             response = agent.discuss(discussion_history, iteration)
@@ -127,6 +144,7 @@ def run_iteration(
             discussion_entry = {
                 "agent_id": agent.agent_id,
                 "discussion_round": disc_round,
+                "speaking_order": [a.agent_id for a in round_order],
                 "response": response,
             }
             log["discussion"].append(discussion_entry)
@@ -175,6 +193,10 @@ def run_experiment(
     source: str = "all",
     overlap: str = "nested",
     setting: int = 1,
+    feedback_mode: str = "F1",
+    incorrect_pattern: Optional[str] = None,
+    incorrect_warning: bool = False,
+    incorrect_seed: int = 99,
     k: int = 3,
     num_iterations: int = 3,
     num_discussion_rounds: int = 1,
@@ -189,7 +211,8 @@ def run_experiment(
         counts:             List of 3 integers — items each agent knows [A, B, C].
         source:             Source pool: "all", "top", or "bottom".
         overlap:            Overlap pattern: "nested", "disjoint", "O3", "O4".
-        setting:            Experimental setting 1–4 (passed through, wired in Phase 2).
+        setting:            Experimental setting 1–4.
+        feedback_mode:      Feedback mode: "F1"–"F5".
         k:                  Number of candidates per iteration.
         num_iterations:     Number of iterations to run.
         model:              OpenAI model identifier.
@@ -205,9 +228,22 @@ def run_experiment(
     # ── Setup ────────────────────────────────────────────────────────────────
     client = OpenAI(api_key=config.OPENAI_API_KEY)
 
-    knowledge_assignments = generate_knowledge_assignment(
-        counts, source=source, overlap=overlap, seed=knowledge_seed
-    )
+    incorrect_assignments = None
+    if incorrect_pattern:
+        correct_assignments, incorrect_assignments = generate_mixed_knowledge_assignment(
+            counts=counts,
+            incorrect_pattern=incorrect_pattern,
+            seed=knowledge_seed,
+            incorrect_seed=incorrect_seed,
+        )
+        knowledge_assignments = [
+            correct + incorrect
+            for correct, incorrect in zip(correct_assignments, incorrect_assignments)
+        ]
+    else:
+        knowledge_assignments = generate_knowledge_assignment(
+            counts, source=source, overlap=overlap, seed=knowledge_seed
+        )
 
     # ── Compute setting-dependent info ───────────────────────────────────
     team_knowledge_info = None
@@ -232,6 +268,7 @@ def run_experiment(
             num_agents=3,
             team_knowledge_info=team_knowledge_info,
             leader_id=leader_id,
+            knowledge_warning=incorrect_warning,
         )
         for i in range(3)
     ]
@@ -239,9 +276,13 @@ def run_experiment(
     counts_label = "-".join(str(c) for c in counts)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_id = (
-        f"c{counts_label}__{source}__{overlap}__s{setting}"
+        f"c{counts_label}__{source}__{overlap}__s{setting}__fb{feedback_mode}"
         f"__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
     )
+    if incorrect_pattern:
+        experiment_id += f"__inc{incorrect_pattern}"
+        if incorrect_warning:
+            experiment_id += "_warn"
 
     # ── Knowledge dump ───────────────────────────────────────────────────────
     agent_labels = ["A", "B", "C"]
@@ -259,11 +300,21 @@ def run_experiment(
         }
         agent_knowledge_log.append(agent_entry)
 
+    if incorrect_assignments:
+        for i, incorrect in enumerate(incorrect_assignments):
+            agent_knowledge_log[i]["incorrect_items"] = [
+                {"item": item, "incorrect_rank": rank, "explanation": expl}
+                for item, rank, expl in incorrect
+            ]
+
     if verbose:
         print(f"\n{'#'*60}")
         print(f"  EXPERIMENT: {experiment_id}")
         print(f"  Knowledge: {format_knowledge_counts(counts)}")
         print(f"  Source: {source}, Overlap: {overlap}, Setting: {setting}")
+        print(f"  Feedback mode: {feedback_mode}")
+        if incorrect_pattern:
+            print(f"  Incorrect pattern: {incorrect_pattern}, Warning: {incorrect_warning}")
         print(f"  k={k}, iterations={num_iterations}, model={model}")
         print(f"{'#'*60}")
         print(f"\n  === KNOWLEDGE ASSIGNMENTS ===")
@@ -288,6 +339,10 @@ def run_experiment(
         "source": source,
         "overlap": overlap,
         "setting": setting,
+        "feedback_mode": feedback_mode,
+        "incorrect_pattern": incorrect_pattern,
+        "incorrect_warning": incorrect_warning,
+        "incorrect_seed": incorrect_seed,
         "team_knowledge_info": team_knowledge_info,
         "leader_id": leader_id,
         "k": k,
@@ -295,6 +350,7 @@ def run_experiment(
         "num_discussion_rounds": num_discussion_rounds,
         "model": model,
         "knowledge_seed": knowledge_seed,
+        "history_scope": "last_iteration_only",
         "agent_knowledge": agent_knowledge_log,
         "iterations": [],
     }
@@ -303,20 +359,79 @@ def run_experiment(
     prev_candidates: Optional[List[Dict[str, int]]] = None
     prev_scores: Optional[List[int]] = None
 
+    # For F4/F5: accumulate all candidates and scores across iterations
+    all_candidates_history: List[Dict[str, int]] = []
+    all_scores_history: List[int] = []
+
+    # Determine feedback frequency for F1-F3
+    feedback_frequency = {"F1": 1, "F2": 2, "F3": 4}.get(feedback_mode, 1)
+
+    # Determine results context label
+    if feedback_mode in ("F1", "F2", "F3"):
+        results_context = "the previous iteration"
+    elif feedback_mode == "F4":
+        results_context = "all prior iterations"
+    elif feedback_mode == "F5":
+        results_context = "all prior iterations (showing top 8 candidates only)"
+    else:
+        results_context = "the previous iteration"
+
     for it in range(1, num_iterations + 1):
+        # ── Determine what feedback to pass this iteration ──
+        if feedback_mode in ("F1", "F2", "F3"):
+            if it == 1:
+                iter_candidates = None
+                iter_scores = None
+            elif it % feedback_frequency == 0:
+                iter_candidates = prev_candidates
+                iter_scores = prev_scores
+            else:
+                iter_candidates = None
+                iter_scores = None
+
+        elif feedback_mode == "F4":
+            if all_candidates_history:
+                iter_candidates = list(all_candidates_history)
+                iter_scores = list(all_scores_history)
+            else:
+                iter_candidates = None
+                iter_scores = None
+
+        elif feedback_mode == "F5":
+            if all_candidates_history:
+                paired = list(zip(all_scores_history, all_candidates_history))
+                paired.sort(key=lambda x: x[0])
+                top_8 = paired[:8]
+                iter_scores = [s for s, _ in top_8]
+                iter_candidates = [c for _, c in top_8]
+            else:
+                iter_candidates = None
+                iter_scores = None
+
+        else:
+            iter_candidates = prev_candidates
+            iter_scores = prev_scores
+
         final_candidates, final_scores, iter_log = run_iteration(
             agents=agents,
             k=k,
             iteration=it,
-            previous_candidates=prev_candidates,
-            previous_scores=prev_scores,
+            previous_candidates=iter_candidates,
+            previous_scores=iter_scores,
             num_discussion_rounds=num_discussion_rounds,
+            discussion_seed=knowledge_seed + it,
+            results_context=results_context,
             verbose=verbose,
         )
         experiment_log["iterations"].append(iter_log)
 
+        # Update tracking
         prev_candidates = final_candidates
         prev_scores = final_scores
+
+        # Accumulate for F4/F5
+        all_candidates_history.extend(final_candidates)
+        all_scores_history.extend(final_scores)
 
     # ── Build iteration summary ──────────────────────────────────────────────
     iteration_summary = []

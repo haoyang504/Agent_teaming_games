@@ -91,7 +91,7 @@ def main() -> None:
         "--iterations",
         type=int,
         default=3,
-        help="Number of iterative rounds (default: 3).",
+        help="Number of iterative rounds (default: 3). Full protocol: 20.",
     )
     parser.add_argument(
         "--model",
@@ -112,13 +112,48 @@ def main() -> None:
         help="Directory to save experiment result JSON files.",
     )
     parser.add_argument(
+        "--feedback-mode",
+        type=str,
+        default="F1",
+        choices=["F1", "F2", "F3", "F4", "F5"],
+        help=(
+            "Feedback mode (default: F1). "
+            "F1=every iter, F2=every 2, F3=every 4, "
+            "F4=full history all candidates, F5=full history top 8 only."
+        ),
+    )
+    parser.add_argument(
         "--discussion-rounds",
         type=int,
-        default=1,
+        default=3,
         help=(
-            "Number of discussion rounds per iteration (default: 1). "
-            "Each round = all 3 agents speak once."
+            "Number of discussion rounds per iteration (default: 3). "
+            "Each round = all 3 agents speak once in randomized order."
         ),
+    )
+    parser.add_argument(
+        "--incorrect-pattern",
+        type=str,
+        default=None,
+        choices=["I1", "I2", "I3", "I4"],
+        help=(
+            "Incorrect knowledge distribution pattern. "
+            "I1=Agent A only, I2=Agent B only, I3=Agent C only, "
+            "I4=all agents (Config 1: Agent C gets 2 instead of A). "
+            "If not set, no incorrect knowledge is used."
+        ),
+    )
+    parser.add_argument(
+        "--incorrect-warning",
+        action="store_true",
+        default=False,
+        help="Add a warning to agents that some knowledge may be incorrect.",
+    )
+    parser.add_argument(
+        "--incorrect-seed",
+        type=int,
+        default=99,
+        help="Seed for incorrect ranking generation (default: 99).",
     )
     args = parser.parse_args()
 
@@ -156,6 +191,10 @@ def main() -> None:
         source=source,
         overlap=overlap,
         setting=args.setting,
+        feedback_mode=args.feedback_mode,
+        incorrect_pattern=args.incorrect_pattern,
+        incorrect_warning=args.incorrect_warning,
+        incorrect_seed=args.incorrect_seed,
         k=args.k,
         num_iterations=args.iterations,
         num_discussion_rounds=args.discussion_rounds,
