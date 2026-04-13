@@ -48,6 +48,7 @@ def run_iteration(
     previous_scores: Optional[List[int]],
     num_discussion_rounds: int = 1,
     discussion_seed: Optional[int] = None,
+    discussion_order: str = "random",
     results_context: str = "the previous iteration",
     verbose: bool = True,
 ) -> Tuple[List[Dict[str, int]], List[int], Dict[str, Any]]:
@@ -60,6 +61,7 @@ def run_iteration(
         previous_candidates:  Candidates from the prior iteration (None = first iter).
         previous_scores:      SAD scores corresponding to previous_candidates.
         discussion_seed:      Seed for reproducible discussion order shuffling.
+        discussion_order:     "random", "ABC" (1→2→3), or "CBA" (3→2→1).
         results_context:      Human-readable label for what the feedback covers.
         verbose:              If True, print progress to stdout.
 
@@ -125,9 +127,14 @@ def run_iteration(
         print(f"{'='*60}")
 
     for disc_round in range(1, num_discussion_rounds + 1):
-        # Shuffle speaking order for this round
-        round_order = list(agents)
-        disc_rng.shuffle(round_order)
+        # Determine speaking order for this round
+        if discussion_order == "ABC":
+            round_order = sorted(agents, key=lambda a: a.agent_id)
+        elif discussion_order == "CBA":
+            round_order = sorted(agents, key=lambda a: a.agent_id, reverse=True)
+        else:
+            round_order = list(agents)
+            disc_rng.shuffle(round_order)
         log["discussion_orders"][disc_round] = [a.agent_id for a in round_order]
 
         if verbose:
@@ -200,6 +207,7 @@ def run_experiment(
     k: int = 3,
     num_iterations: int = 3,
     num_discussion_rounds: int = 1,
+    discussion_order: str = "random",
     model: str = "gpt-4o-mini",
     knowledge_seed: int = 42,
     output_dir: str = "results",
@@ -277,7 +285,7 @@ def run_experiment(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_id = (
         f"c{counts_label}__{source}__{overlap}__s{setting}__fb{feedback_mode}"
-        f"__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
+        f"__do{discussion_order}__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
     )
     if incorrect_pattern:
         experiment_id += f"__inc{incorrect_pattern}"
@@ -348,6 +356,7 @@ def run_experiment(
         "k": k,
         "num_iterations": num_iterations,
         "num_discussion_rounds": num_discussion_rounds,
+        "discussion_order": discussion_order,
         "model": model,
         "knowledge_seed": knowledge_seed,
         "history_scope": "last_iteration_only",
@@ -420,6 +429,7 @@ def run_experiment(
             previous_scores=iter_scores,
             num_discussion_rounds=num_discussion_rounds,
             discussion_seed=knowledge_seed + it,
+            discussion_order=discussion_order,
             results_context=results_context,
             verbose=verbose,
         )

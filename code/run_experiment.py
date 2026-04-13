@@ -132,6 +132,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--discussion-order",
+        type=str,
+        default="random",
+        choices=["random", "ABC", "CBA"],
+        help=(
+            "Discussion speaking order (default: random). "
+            "ABC=fixed 1→2→3, CBA=fixed 3→2→1, random=shuffled each round."
+        ),
+    )
+    parser.add_argument(
         "--incorrect-pattern",
         type=str,
         default=None,
@@ -198,6 +208,7 @@ def main() -> None:
         k=args.k,
         num_iterations=args.iterations,
         num_discussion_rounds=args.discussion_rounds,
+        discussion_order=args.discussion_order,
         model=args.model,
         knowledge_seed=args.seed,
         output_dir=args.output_dir,
