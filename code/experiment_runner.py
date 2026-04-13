@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from openai import OpenAI
+from portkey_ai import Portkey
 
 from moon_survival_env import (
     evaluate_ranking,
@@ -234,7 +234,7 @@ def run_experiment(
     assert len(counts) == 3, "Exactly 3 agents are supported."
 
     # ── Setup ────────────────────────────────────────────────────────────────
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    client = Portkey(api_key=config.PORTKEY_API_KEY)
 
     incorrect_assignments = None
     if incorrect_pattern:
@@ -267,12 +267,14 @@ def run_experiment(
     if setting in (3, 4):
         leader_id = 3
 
+    portkey_model = config.PORTKEY_MODEL
+
     agents = [
         MoonSurvivalAgent(
             agent_id=i + 1,
             knowledge=knowledge_assignments[i],
             client=client,
-            model=model,
+            model=portkey_model,
             num_agents=3,
             team_knowledge_info=team_knowledge_info,
             leader_id=leader_id,

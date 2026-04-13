@@ -16,7 +16,10 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from openai import OpenAI
+try:
+    from portkey_ai import Portkey as LLMClient
+except ImportError:
+    from openai import OpenAI as LLMClient
 
 from moon_survival_env import (
     ITEMS,
@@ -29,7 +32,7 @@ from knowledge_manager import format_knowledge_for_prompt
 # ── LLM helper ───────────────────────────────────────────────────────────────
 
 def _chat(
-    client: OpenAI,
+    client,
     model: str,
     messages: List[Dict[str, str]],
     temperature: float = 0.7,
@@ -78,7 +81,7 @@ class MoonSurvivalAgent:
         self,
         agent_id: int,
         knowledge: List[Tuple[str, int, str]],
-        client: OpenAI,
+        client,
         model: str = "gpt-4o-mini",
         num_agents: int = 3,
         team_knowledge_info: Optional[Dict[str, int]] = None,
