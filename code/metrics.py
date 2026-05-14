@@ -172,6 +172,21 @@ def compute_dominance(experiment_log: Dict[str, Any]) -> List[Dict[str, Any]]:
             most_dominant = max(dominance, key=lambda a: dominance[a])
             least_dominant = min(dominance, key=lambda a: dominance[a])
 
+            # Phase 8 (8G): percentage share of the final ranking
+            # attributable to each agent's proposals. unattributed pairs (no
+            # proposer claim) count toward the denominator but not toward any
+            # agent's numerator, so the three shares can sum to less than 100.
+            total_pairs = len(pairs)
+            if total_pairs > 0:
+                contribution_share_pct = {
+                    aid: round(dominance[aid] / total_pairs * 100, 1)
+                    for aid in all_agents
+                }
+                unattributed_share_pct = round(unattributed / total_pairs * 100, 1)
+            else:
+                contribution_share_pct = {aid: 0.0 for aid in all_agents}
+                unattributed_share_pct = 0.0
+
             results.append({
                 "iteration": iteration,
                 "candidate_index": ci,
@@ -179,6 +194,8 @@ def compute_dominance(experiment_log: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "most_dominant": most_dominant,
                 "least_dominant": least_dominant,
                 "unattributed": unattributed,
+                "contribution_share_pct": contribution_share_pct,
+                "unattributed_share_pct": unattributed_share_pct,
             })
 
     return results
@@ -203,24 +220,75 @@ def analyze_experiment(experiment_log: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     overall_dominance: Dict[int, int] = {}
+    overall_unattributed = 0
     for entry in dominance:
         for aid, count in entry["dominance"].items():
             overall_dominance[aid] = overall_dominance.get(aid, 0) + count
+        overall_unattributed += entry["unattributed"]
 
     most_dominant_agent = (
         max(overall_dominance, key=lambda a: overall_dominance[a])
         if overall_dominance else None
     )
 
+    # Phase 8 (8G): aggregate contribution share across all iterations.
+    grand_total = sum(overall_dominance.values()) + overall_unattributed
+    if grand_total > 0:
+        overall_contribution_share_pct = {
+            aid: round(count / grand_total * 100, 1)
+            for aid, count in overall_dominance.items()
+        }
+        overall_unattributed_share_pct = round(
+            overall_unattributed / grand_total * 100, 1
+        )
+    else:
+        overall_contribution_share_pct = {aid: 0.0 for aid in overall_dominance}
+        overall_unattributed_share_pct = 0.0
+
+    # Per-iteration team final SAD (one row per iteration).
+    iteration_final_sad = [
+        {
+            "iteration": it["iteration"],
+            "scores": it["final_scores"],
+            "best_sad": min(it["final_scores"]) if it["final_scores"] else None,
+            "mean_sad": (
+                round(sum(it["final_scores"]) / len(it["final_scores"]), 2)
+                if it["final_scores"] else None
+            ),
+        }
+        for it in experiment_log["iterations"]
+    ]
+
+    # Per-agent per-iteration proposal SADs (only present after Phase 8 8G).
+    iteration_proposal_sad: List[Dict[str, Any]] = []
+    for it in experiment_log["iterations"]:
+        per_agent: Dict[int, Dict[str, Any]] = {}
+        for prop in it.get("proposals", []):
+            if "candidate_scores" in prop:
+                per_agent[prop["agent_id"]] = {
+                    "scores": prop["candidate_scores"],
+                    "best_sad": prop.get("best_proposal_sad"),
+                    "mean_sad": prop.get("mean_proposal_sad"),
+                }
+        if per_agent:
+            iteration_proposal_sad.append({
+                "iteration": it["iteration"],
+                "per_agent": per_agent,
+            })
+
     return {
         "experiment_id": experiment_log.get("experiment_id", "unknown"),
         "novelty": novelty,
         "recombination": recombination,
         "dominance": dominance,
+        "iteration_final_sad": iteration_final_sad,
+        "iteration_proposal_sad": iteration_proposal_sad,
         "summary": {
             "mean_novelty_ratio": round(mean_novelty, 4),
             "mean_recombination_score": round(mean_recombo, 4),
             "overall_dominance": overall_dominance,
+            "overall_contribution_share_pct": overall_contribution_share_pct,
+            "overall_unattributed_share_pct": overall_unattributed_share_pct,
             "most_dominant_agent": most_dominant_agent,
         },
     }
@@ -282,14 +350,32 @@ if __name__ == "__main__":
         print(f"\n  --- Dominance ---")
         for entry in results["dominance"]:
             print(f"  Iter {entry['iteration']} Cand {entry['candidate_index']}: "
-                  f"{entry['dominance']}, most={entry['most_dominant']}, "
-                  f"least={entry['least_dominant']}, unattributed={entry['unattributed']}")
+                  f"{entry['dominance']}  share%={entry['contribution_share_pct']}  "
+                  f"unattrib%={entry['unattributed_share_pct']}  "
+                  f"most={entry['most_dominant']}")
+
+        print(f"\n  --- Iteration final SAD ---")
+        for row in results["iteration_final_sad"]:
+            print(f"  Iter {row['iteration']}: best={row['best_sad']}, "
+                  f"mean={row['mean_sad']}, scores={row['scores']}")
+
+        if results["iteration_proposal_sad"]:
+            print(f"\n  --- Per-agent proposal SAD ---")
+            for row in results["iteration_proposal_sad"]:
+                line_parts = [f"Iter {row['iteration']}"]
+                for aid, stats in sorted(row["per_agent"].items()):
+                    line_parts.append(
+                        f"A{aid}=best:{stats['best_sad']}/mean:{stats['mean_sad']}"
+                    )
+                print("  " + "  ".join(line_parts))
 
         print(f"\n  --- Summary ---")
         s = results["summary"]
         print(f"  Mean novelty ratio: {s['mean_novelty_ratio']:.2f}")
         print(f"  Mean recombination score: {s['mean_recombination_score']:.2f}")
         print(f"  Overall dominance: {s['overall_dominance']}")
+        print(f"  Overall contribution share %: {s['overall_contribution_share_pct']}  "
+              f"(unattributed: {s['overall_unattributed_share_pct']}%)")
         print(f"  Most dominant agent: {s['most_dominant_agent']}")
 
     if args.output:

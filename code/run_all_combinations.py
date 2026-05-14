@@ -1,18 +1,16 @@
 """
 run_all_combinations.py
 =======================
-Runs the full sweep of knowledge configurations for the Moon Survival
-agent teaming experiment.
+Runs the unique-conditions sweep for the Moon Survival agent teaming experiment.
 
-Core sweep: 3 configs × 4 overlaps = 12 conditions (per source variant).
+After Phase 8 collapse: 7 unique knowledge conditions (see docs/PHASE_8.md
+"Task 8H"). 8H replaces this naive product enumeration with the explicit
+unique-conditions table.
 
 Usage
 -----
-# Run all 12 core conditions (source=all) with defaults:
+# Run all 7 unique conditions with defaults:
     python run_all_combinations.py
-
-# Include source variants (3 × 12 = 36 total):
-    python run_all_combinations.py --include-source-variants
 
 # Custom settings:
     python run_all_combinations.py --k 3 --iterations 3 --discussion-rounds 2
@@ -27,16 +25,17 @@ import sys
 
 from experiment_runner import run_experiment
 
-# 3 knowledge configs
-CONFIGS = [
-    [0, 2, 4],  # Config 1: High diversity
-    [1, 2, 3],  # Config 2: Medium diversity
-    [2, 2, 2],  # Config 3: Low/equal diversity
+# Phase 8 unique-conditions table (populated in Task 8H).
+# Each entry is (counts, overlap, note).
+UNIQUE_CONDITIONS = [
+    ([0, 2, 4], "nested",   "[0,2,4]/nested — also covers O3 (A empty)"),
+    ([0, 2, 4], "disjoint", "[0,2,4]/disjoint — also covers O4 and O5"),
+    ([2, 2, 2], "nested",   "[2,2,2]/nested — degenerate all-same (control)"),
+    ([2, 2, 2], "disjoint", "[2,2,2]/disjoint — max diversity"),
+    ([2, 2, 2], "O3",       "[2,2,2]/O3 — A holds the unique knowledge"),
+    ([2, 2, 2], "O4",       "[2,2,2]/O4 — B holds the unique knowledge"),
+    ([2, 2, 2], "O5",       "[2,2,2]/O5 — C (leader) holds the unique knowledge"),
 ]
-
-OVERLAPS = ["nested", "disjoint", "O3", "O4"]
-SOURCES_CORE = ["all"]
-SOURCES_ALL = ["all", "top", "bottom"]
 
 
 def main() -> None:
@@ -73,28 +72,15 @@ def main() -> None:
         help="Directory to save result files."
     )
     parser.add_argument(
-        "--include-source-variants", action="store_true",
-        help="Also sweep source=top and source=bottom (36 conditions instead of 12)."
-    )
-    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print all combinations that would run without calling the API."
     )
     args = parser.parse_args()
 
-    sources = SOURCES_ALL if args.include_source_variants else SOURCES_CORE
-
-    # Build all combinations
-    combos = []
-    for source in sources:
-        for counts in CONFIGS:
-            for overlap in OVERLAPS:
-                combos.append((counts, source, overlap))
-
-    total = len(combos)
+    total = len(UNIQUE_CONDITIONS)
 
     print(f"\n{'#'*70}")
-    print(f"  FULL CONFIGURATION SWEEP")
+    print(f"  PHASE 8 UNIQUE-CONDITIONS SWEEP")
     print(f"  Total conditions : {total}")
     print(f"  Setting: {args.setting}  |  k={args.k}  |  iterations={args.iterations}  |  discussion_rounds={args.discussion_rounds}")
     print(f"  Model: {args.model}")
@@ -102,30 +88,29 @@ def main() -> None:
 
     if args.dry_run:
         print("  DRY RUN — conditions that would be executed:\n")
-        for i, (counts, source, overlap) in enumerate(combos, 1):
-            label = f"counts={counts}, source={source}, overlap={overlap}"
-            print(f"  {i:>2}/{total}  {label}")
+        for i, (counts, overlap, note) in enumerate(UNIQUE_CONDITIONS, 1):
+            print(f"  {i:>2}/{total}  counts={counts}, overlap={overlap}    # {note}")
         print()
         return
 
     # Run each combination
     results_summary = []
 
-    for i, (counts, source, overlap) in enumerate(combos, 1):
-        label = f"counts={counts}, source={source}, overlap={overlap}"
+    for i, (counts, overlap, note) in enumerate(UNIQUE_CONDITIONS, 1):
+        label = f"counts={counts}, overlap={overlap}"
         print(f"\n{'='*70}")
-        print(f"  [{i}/{total}]  {label}")
+        print(f"  [{i}/{total}]  {label}   # {note}")
         print(f"{'='*70}")
 
         try:
             log = run_experiment(
                 counts=counts,
-                source=source,
                 overlap=overlap,
                 setting=args.setting,
                 k=args.k,
                 num_iterations=args.iterations,
                 num_discussion_rounds=args.discussion_rounds,
+                discussion_order="ABC",
                 model=args.model,
                 knowledge_seed=args.seed,
                 output_dir=args.output_dir,

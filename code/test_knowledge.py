@@ -1,23 +1,21 @@
 from knowledge_manager import generate_knowledge_assignment
 
-# Test all 12 core configurations
+# Phase 8 condition matrix: 2 configs × 5 overlaps. Source variants removed.
 configs = [
-    ([0, 2, 4], "all", "nested"),
-    ([0, 2, 4], "all", "disjoint"),
-    ([0, 2, 4], "all", "O3"),
-    ([0, 2, 4], "all", "O4"),
-    ([1, 2, 3], "all", "nested"),
-    ([1, 2, 3], "all", "disjoint"),
-    ([1, 2, 3], "all", "O3"),
-    ([1, 2, 3], "all", "O4"),
-    ([2, 2, 2], "all", "nested"),
-    ([2, 2, 2], "all", "disjoint"),
-    ([2, 2, 2], "all", "O3"),
-    ([2, 2, 2], "all", "O4"),
+    ([0, 2, 4], "nested"),
+    ([0, 2, 4], "disjoint"),
+    ([0, 2, 4], "O3"),
+    ([0, 2, 4], "O4"),
+    ([0, 2, 4], "O5"),
+    ([2, 2, 2], "nested"),
+    ([2, 2, 2], "disjoint"),
+    ([2, 2, 2], "O3"),
+    ([2, 2, 2], "O4"),
+    ([2, 2, 2], "O5"),
 ]
 
-for counts, source, overlap in configs:
-    assignments = generate_knowledge_assignment(counts, source, overlap, seed=42)
+for counts, overlap in configs:
+    assignments = generate_knowledge_assignment(counts, overlap, seed=42)
 
     # Check counts
     for i, (count, assignment) in enumerate(zip(counts, assignments)):
@@ -29,32 +27,42 @@ for counts, source, overlap in configs:
 
     # Check overlap patterns
     if overlap == "nested":
-        assert items_a <= items_b, f"FAIL nested: A not subset of B"
-        assert items_b <= items_c, f"FAIL nested: B not subset of C"
+        assert items_a <= items_b, f"FAIL nested {counts}: A not subset of B"
+        assert items_b <= items_c, f"FAIL nested {counts}: B not subset of C"
     elif overlap == "disjoint":
-        assert items_a & items_b == set(), f"FAIL disjoint: A and B overlap"
-        assert items_a & items_c == set(), f"FAIL disjoint: A and C overlap"
-        assert items_b & items_c == set(), f"FAIL disjoint: B and C overlap"
+        assert items_a & items_b == set(), f"FAIL disjoint {counts}: A and B overlap"
+        assert items_a & items_c == set(), f"FAIL disjoint {counts}: A and C overlap"
+        assert items_b & items_c == set(), f"FAIL disjoint {counts}: B and C overlap"
     elif overlap == "O3":
-        assert items_a & items_c == set(), f"FAIL O3: A and C should not overlap"
+        # B ⊆ C; A disjoint from both
+        assert items_b <= items_c, f"FAIL O3 {counts}: B not subset of C"
+        assert items_a & items_b == set(), f"FAIL O3 {counts}: A and B overlap"
+        assert items_a & items_c == set(), f"FAIL O3 {counts}: A and C overlap"
     elif overlap == "O4":
-        assert items_b & items_c == set(), f"FAIL O4: B and C should not overlap"
+        # A ⊆ C; B disjoint from both
+        assert items_a <= items_c, f"FAIL O4 {counts}: A not subset of C"
+        assert items_a & items_b == set(), f"FAIL O4 {counts}: A and B overlap"
+        assert items_b & items_c == set(), f"FAIL O4 {counts}: B and C overlap"
+    elif overlap == "O5":
+        # smaller of A/B is a subset of the larger; C disjoint from both
+        if len(items_a) <= len(items_b):
+            assert items_a <= items_b, f"FAIL O5 {counts}: A not subset of B"
+        else:
+            assert items_b <= items_a, f"FAIL O5 {counts}: B not subset of A"
+        assert items_a & items_c == set(), f"FAIL O5 {counts}: A and C overlap"
+        assert items_b & items_c == set(), f"FAIL O5 {counts}: B and C overlap"
 
-    print(f"PASS: counts={counts}, source={source}, overlap={overlap}")
+    print(f"PASS: counts={counts}, overlap={overlap}")
     for i, label in enumerate(["A", "B", "C"]):
         item_names = [item for item, _, _ in assignments[i]]
         print(f"  Agent {label}: {item_names}")
     print()
 
-# Test source filtering
-for source in ["all", "top", "bottom"]:
-    assignments = generate_knowledge_assignment([2, 2, 4], "all" if source == "all" else source, "disjoint", seed=42)
-    for i, assignment in enumerate(assignments):
-        for item, rank, _ in assignment:
-            if source == "top":
-                assert rank <= 8, f"FAIL source=top: item '{item}' has rank {rank}"
-            elif source == "bottom":
-                assert rank >= 8, f"FAIL source=bottom: item '{item}' has rank {rank}"
-    print(f"PASS: source={source} filtering correct")
+# Sanity check: O5 with [2,2,2] should give A == B (set equality)
+a, b, c = generate_knowledge_assignment([2, 2, 2], "O5", seed=42)
+items_a = {item for item, _, _ in a}
+items_b = {item for item, _, _ in b}
+assert items_a == items_b, f"FAIL O5 [2,2,2]: A and B should be identical"
+print("PASS: O5 [2,2,2] yields A == B")
 
 print("\nAll tests passed!")

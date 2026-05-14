@@ -21,23 +21,11 @@ import sys
 
 from experiment_runner import run_experiment
 
-# ── Predefined configurations (3 configs × 4 overlaps = 12 core conditions) ──
+# ── Predefined configurations (Phase 8: 2 configs, overlap chosen separately) ──
+# Use --overlap to pick the overlap pattern; the named config sets only counts.
 CONFIGS = {
-    # Config 1: High diversity [0, 2, 4]
-    "high_div":          {"counts": [0, 2, 4], "source": "all", "overlap": "nested"},
-    "high_div_disjoint": {"counts": [0, 2, 4], "source": "all", "overlap": "disjoint"},
-    "high_div_O3":       {"counts": [0, 2, 4], "source": "all", "overlap": "O3"},
-    "high_div_O4":       {"counts": [0, 2, 4], "source": "all", "overlap": "O4"},
-    # Config 2: Medium diversity [1, 2, 3]
-    "med_div":           {"counts": [1, 2, 3], "source": "all", "overlap": "nested"},
-    "med_div_disjoint":  {"counts": [1, 2, 3], "source": "all", "overlap": "disjoint"},
-    "med_div_O3":        {"counts": [1, 2, 3], "source": "all", "overlap": "O3"},
-    "med_div_O4":        {"counts": [1, 2, 3], "source": "all", "overlap": "O4"},
-    # Config 3: Low diversity [2, 2, 2]
-    "low_div":           {"counts": [2, 2, 2], "source": "all", "overlap": "nested"},
-    "low_div_disjoint":  {"counts": [2, 2, 2], "source": "all", "overlap": "disjoint"},
-    "low_div_O3":        {"counts": [2, 2, 2], "source": "all", "overlap": "O3"},
-    "low_div_O4":        {"counts": [2, 2, 2], "source": "all", "overlap": "O4"},
+    "high_div": {"counts": [0, 2, 4]},  # Config 1: high diversity
+    "low_div":  {"counts": [2, 2, 2]},  # Config 3: low / equal diversity
 }
 
 
@@ -61,18 +49,11 @@ def main() -> None:
         help="Comma-separated item counts for [A,B,C], e.g. '0,2,4'.",
     )
     parser.add_argument(
-        "--source",
-        type=str,
-        default=None,
-        choices=["all", "top", "bottom"],
-        help="Source pool override (default: 'all'). Values: all, top, bottom.",
-    )
-    parser.add_argument(
         "--overlap",
         type=str,
-        default=None,
-        choices=["nested", "disjoint", "O3", "O4"],
-        help="Overlap pattern override (default: 'nested'). Values: nested, disjoint, O3, O4.",
+        default="nested",
+        choices=["nested", "disjoint", "O3", "O4", "O5"],
+        help="Overlap pattern (default: 'nested'). Values: nested, disjoint, O3, O4, O5.",
     )
     parser.add_argument(
         "--setting",
@@ -115,11 +96,10 @@ def main() -> None:
         "--feedback-mode",
         type=str,
         default="F1",
-        choices=["F1", "F2", "F3", "F4", "F5"],
+        choices=["F1", "F2", "F3"],
         help=(
             "Feedback mode (default: F1). "
-            "F1=every iter, F2=every 2, F3=every 4, "
-            "F4=full history all candidates, F5=full history top 8 only."
+            "F1=every iter, F2=every 2 iters, F3=every 4 iters."
         ),
     )
     parser.add_argument(
@@ -128,17 +108,17 @@ def main() -> None:
         default=3,
         help=(
             "Number of discussion rounds per iteration (default: 3). "
-            "Each round = all 3 agents speak once in randomized order."
+            "Each round = all 3 agents speak once in the configured order."
         ),
     )
     parser.add_argument(
         "--discussion-order",
         type=str,
-        default="random",
-        choices=["random", "ABC", "CBA"],
+        default="ABC",
+        choices=["ABC", "CBA"],
         help=(
-            "Discussion speaking order (default: random). "
-            "ABC=fixed 1→2→3, CBA=fixed 3→2→1, random=shuffled each round."
+            "Discussion speaking order (default: ABC). "
+            "ABC=fixed 1→2→3, CBA=fixed 3→2→1."
         ),
     )
     parser.add_argument(
@@ -169,36 +149,26 @@ def main() -> None:
 
     # ── Resolve configuration ─────────────────────────────────────────────
     if args.counts:
-        # Custom counts specified
         parts = args.counts.split(",")
         if len(parts) != 3:
             print("ERROR: --counts must be exactly 3 comma-separated integers.")
             sys.exit(1)
         counts = [int(p.strip()) for p in parts]
-        source = args.source or "all"
-        overlap = args.overlap or "nested"
     elif args.config:
         if args.config not in CONFIGS:
             print(f"ERROR: Unknown config '{args.config}'. Available: {list(CONFIGS.keys())}")
             sys.exit(1)
-        cfg = CONFIGS[args.config]
-        counts = cfg["counts"]
-        source = args.source or cfg["source"]
-        overlap = args.overlap or cfg["overlap"]
+        counts = CONFIGS[args.config]["counts"]
     else:
-        # Default to high_div
-        cfg = CONFIGS["high_div"]
-        counts = cfg["counts"]
-        source = args.source or cfg["source"]
-        overlap = args.overlap or cfg["overlap"]
+        counts = CONFIGS["high_div"]["counts"]
+    overlap = args.overlap
 
     # ── Run ──────────────────────────────────────────────────────────────────
     print(f"\n\n{'#'*70}")
-    print(f"  Config: counts={counts}, source={source}, overlap={overlap}, setting={args.setting}")
+    print(f"  Config: counts={counts}, overlap={overlap}, setting={args.setting}")
     print(f"{'#'*70}")
     run_experiment(
         counts=counts,
-        source=source,
         overlap=overlap,
         setting=args.setting,
         feedback_mode=args.feedback_mode,
