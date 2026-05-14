@@ -21,3 +21,4 @@ ENV/
 
 # Config
 code/config.py
+.DS_Store
