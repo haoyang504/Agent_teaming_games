@@ -290,7 +290,7 @@ final = agent_p9._final_select_system_prompt(k=3)
 # Propose system prompt
 check("Each ranking must include ALL 15 items" in propose, "Propose has rule 1 stem")
 check("COMMON REASONING" in propose, "Propose has COMMON REASONING block")
-check("parachute silk" in propose, "Propose has the worked example")
+check("Item X" in propose and "Item Y" in propose, "Propose has the worked example")
 
 # Discuss system prompt
 check("Refer to candidates by their IDs" in discuss, "Discuss has rule 1 stem")

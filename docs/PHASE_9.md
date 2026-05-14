@@ -580,7 +580,7 @@ Verify:
 
 1. **Edge case: count=0 + Setting 1 + iteration 1.** Agent A in `high_div` Setting 1 starts iteration 1 with no specialised knowledge, no team info, no leader info, and no prior results. The COMMON REASONING block has nothing to ground in; the agent will produce something like *"I have no prior data and no specialised knowledge; my proposals are based on general reasoning about lunar survival conditions."* This is expected behavior, not a bug.
 
-2. **Residual leak in Prompt 1's worked example.** The example references parachute silk (NASA rank 8) and dehydrated milk (rank 12) at fictional ranks. The combined positioning of "lower-SAD candidate = silk-at-11 + milk-at-13" carries a weak directional signal (both are marginally closer to truth than the higher-SAD candidate's placements). The "I can't isolate which change drove the gap" sentence is there specifically to undercut this inference. The leak is small, indirect, and accepted. Documented here so future readers don't relitigate.
+2. **Worked example uses neutral placeholders.** The example in CRITICAL RULE 3 references "Item X" and "Item Y" at fictional ranks rather than real item names. An earlier draft used parachute silk and dehydrated milk, but the combined positioning carried a weak directional signal toward the NASA truth ranks (both items happened to be closer to truth in the lower-SAD candidate). Switching to placeholders removes that leak entirely while preserving the structural form of the example (two-candidate comparison, "can't isolate" caveat, independent-variation methodology).
 
 3. **Footer is identical across all three system prompts.** Implemented as a module-level constant in `agent.py`:
 
@@ -633,7 +633,7 @@ Your goal is to propose good rankings that minimize the Sum of Absolute Differen
 CRITICAL RULES:
 1. Each ranking must include ALL 15 items, each assigned a unique rank from 1 to 15. No skipped items, no duplicate ranks.
 2. Include a brief reasoning (2-4 sentences) for each ranking, explaining the strategy and any swaps or priorities you're testing.
-3. Include a "COMMON REASONING" paragraph before your candidates: a summary of the patterns you're drawing on across this iteration's proposals. Ground it in your SPECIALISED KNOWLEDGE section and (if shown) in PREVIOUS ITERATION RESULTS. Cite at least two specific items or prior candidates. E.g., "Last iteration's two candidates scored SAD=24 and SAD=18. They differed in four item placements, including the parachute silk (rank 4 vs. rank 11) and the dehydrated milk (rank 9 vs. rank 13). I can't isolate which change drove the 6-point gap from these two examples alone, so my proposals this iteration will independently vary each of those items while keeping the rest of the lower-SAD candidate's ordering."
+3. Include a "COMMON REASONING" paragraph before your candidates: a summary of the patterns you're drawing on across this iteration's proposals. Ground it in your SPECIALISED KNOWLEDGE section and (if shown) in PREVIOUS ITERATION RESULTS. Cite at least two specific items or prior candidates. E.g., "Last iteration's two candidates scored SAD=24 and SAD=18. They differed in four placements, including Item X (rank 4 vs. rank 11) and Item Y (rank 9 vs. rank 13). I can't isolate which change drove the 6-point gap from these two examples alone, so my proposals this iteration will independently vary those items while keeping the rest of the lower-SAD candidate's ordering."
 
 Output format:
 
