@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,7 +34,28 @@ from knowledge_manager import (
     format_knowledge_counts,
 )
 from agent import MoonSurvivalAgent
+from logger import Logger
 import config
+
+
+def _build_candidates_block(all_proposals: List[Dict[str, Any]]) -> str:
+    """Build the === CANDIDATES === enumeration shown to discussers/leader.
+
+    Args:
+        all_proposals: List of {id, agent, ranking, reasoning} dicts in the
+            order they should be presented (agent_id ascending, then per-agent
+            proposal index).
+    """
+    lines = [f"=== CANDIDATES ({len(all_proposals)}) ==="]
+    for p in all_proposals:
+        lines.append("")
+        lines.append(f"[{p['id']}] (by {p['agent']}):")
+        ranked = sorted(p["ranking"].items(), key=lambda kv: kv[1])
+        for item, rank in ranked:
+            lines.append(f"  {rank}. {item}")
+        if p.get("reasoning"):
+            lines.append(f"  Reasoning: {p['reasoning']}")
+    return "\n".join(lines)
 
 
 # ── Iteration ─────────────────────────────────────────────────────────────────
@@ -47,8 +67,7 @@ def run_iteration(
     previous_candidates: Optional[List[Dict[str, int]]],
     previous_scores: Optional[List[int]],
     num_discussion_rounds: int = 1,
-    discussion_seed: Optional[int] = None,
-    discussion_order: str = "random",
+    discussion_order: str = "ABC",
     results_context: str = "the previous iteration",
     verbose: bool = True,
 ) -> Tuple[List[Dict[str, int]], List[int], Dict[str, Any]]:
@@ -60,8 +79,7 @@ def run_iteration(
         iteration:            Current iteration number (1-indexed).
         previous_candidates:  Candidates from the prior iteration (None = first iter).
         previous_scores:      SAD scores corresponding to previous_candidates.
-        discussion_seed:      Seed for reproducible discussion order shuffling.
-        discussion_order:     "random", "ABC" (1→2→3), or "CBA" (3→2→1).
+        discussion_order:     "ABC" (1→2→3) or "CBA" (3→2→1).
         results_context:      Human-readable label for what the feedback covers.
         verbose:              If True, print progress to stdout.
 
@@ -71,8 +89,6 @@ def run_iteration(
           - final_scores:      Corresponding SAD scores.
           - log:               Dict capturing all prompts, responses, and scores.
     """
-    disc_rng = random.Random(discussion_seed) if discussion_seed is not None else random.Random()
-
     log: Dict[str, Any] = {
         "iteration": iteration,
         "feedback_provided": previous_candidates is not None,
@@ -95,29 +111,63 @@ def run_iteration(
         print(f"{'='*60}")
 
     all_proposals: Dict[int, List[Dict[str, int]]] = {}
-    discussion_history: List[Dict[str, str]] = []
+    # Phase 9: in-memory turn records for threading peer outputs into discuss /
+    # final-select. Each record: {agent, phase, round_num, raw_output}.
+    current_iter_propose_outputs: List[Dict[str, Any]] = []
+    # Phase 9: enumerated candidates with IDs for the CANDIDATES section.
+    all_candidates_records: List[Dict[str, Any]] = []
 
     for agent in agents:
         if verbose:
             print(f"\n  Agent {agent.agent_id} proposing {k} candidate(s)...")
-        candidates, raw = agent.propose_candidates(k, prev_summary, results_context=results_context)
+        candidates, reasonings, raw = agent.propose_candidates(
+            k, prev_summary, results_context=results_context, iteration=iteration
+        )
         all_proposals[agent.agent_id] = candidates
+
+        # Phase 8 (8G): score each agent's proposals individually so we can
+        # see per-agent fluctuation per iteration without an extra LLM call.
+        candidate_scores: List[int] = []
+        for cand in candidates:
+            ranks = ranking_dict_to_list(cand)
+            candidate_scores.append(evaluate_ranking(ranks))
 
         proposal_entry = {
             "agent_id": agent.agent_id,
             "raw_response": raw,
             "candidates": [dict(c) for c in candidates],
+            "candidate_scores": candidate_scores,
+            "best_proposal_sad": min(candidate_scores),
+            "mean_proposal_sad": round(sum(candidate_scores) / len(candidate_scores), 2),
         }
         log["proposals"].append(proposal_entry)
 
-        # Append to discussion history for subsequent phases
-        discussion_history.append({
-            "role": "user",
-            "content": (
-                f"=== Agent {agent.agent_id}'s Proposals (Iteration {iteration}) ===\n"
-                f"{raw}"
-            ),
+        if verbose:
+            print(
+                f"    proposal SADs: {candidate_scores}  "
+                f"(best={proposal_entry['best_proposal_sad']}, "
+                f"mean={proposal_entry['mean_proposal_sad']})"
+            )
+
+        # Phase 9: structured turn record for in-memory threading.
+        current_iter_propose_outputs.append({
+            "agent": agent.display_name,
+            "phase": "propose",
+            "round_num": None,
+            "raw_output": raw,
         })
+
+        # Phase 9: enumerate candidates with A{id}-{idx+1} IDs.
+        for idx, (cand, reasoning) in enumerate(zip(candidates, reasonings)):
+            all_candidates_records.append({
+                "id": f"A{agent.agent_id}-{idx + 1}",
+                "agent": agent.display_name,
+                "ranking": dict(cand),
+                "reasoning": reasoning,
+            })
+
+    # Phase 9: build the CANDIDATES block shown to discussers and the leader.
+    candidates_block = _build_candidates_block(all_candidates_records)
 
     # ── Phase 2 : Round-Robin Discussion ────────────────────────────────────
     if verbose:
@@ -126,6 +176,9 @@ def run_iteration(
         print(f"  ({num_discussion_rounds} discussion round(s), {len(agents)} agents each)")
         print(f"{'='*60}")
 
+    # Phase 9: discussion_history holds structured turn records, not OpenAI dicts.
+    discussion_history: List[Dict[str, Any]] = []
+
     for disc_round in range(1, num_discussion_rounds + 1):
         # Determine speaking order for this round
         if discussion_order == "ABC":
@@ -133,8 +186,9 @@ def run_iteration(
         elif discussion_order == "CBA":
             round_order = sorted(agents, key=lambda a: a.agent_id, reverse=True)
         else:
-            round_order = list(agents)
-            disc_rng.shuffle(round_order)
+            raise ValueError(
+                f"Unknown discussion_order '{discussion_order}'. Valid: ABC, CBA."
+            )
         log["discussion_orders"][disc_round] = [a.agent_id for a in round_order]
 
         if verbose:
@@ -144,7 +198,13 @@ def run_iteration(
         for agent in round_order:
             if verbose:
                 print(f"\n  Agent {agent.agent_id} discussing (round {disc_round})...")
-            response = agent.discuss(discussion_history, iteration)
+            response = agent.discuss(
+                candidates_block=candidates_block,
+                current_iter_propose_outputs=current_iter_propose_outputs,
+                discussion_history=discussion_history,
+                iteration=iteration,
+                round_num=disc_round,
+            )
             if verbose:
                 print(f"    → {response[:200]}{'...' if len(response)>200 else ''}")
 
@@ -156,11 +216,12 @@ def run_iteration(
             }
             log["discussion"].append(discussion_entry)
 
+            # Phase 9: structured turn record for in-memory threading.
             discussion_history.append({
-                "role": "assistant",
-                "content": (
-                    f"=== Agent {agent.agent_id} Discussion Round {disc_round} ===\n{response}"
-                ),
+                "agent": agent.display_name,
+                "phase": "discuss",
+                "round_num": disc_round,
+                "raw_output": response,
             })
 
     # ── Phase 3 : Final Selection (last agent) ──────────────────────────────
@@ -171,7 +232,11 @@ def run_iteration(
         print(f"{'='*60}")
 
     final_candidates, raw_selection = last_agent.select_final_candidates(
-        k, discussion_history, iteration
+        k=k,
+        candidates_block=candidates_block,
+        current_iter_propose_outputs=current_iter_propose_outputs,
+        discussion_history=discussion_history,
+        iteration=iteration,
     )
 
     # ── Phase 4 : Evaluation ────────────────────────────────────────────────
@@ -197,7 +262,6 @@ def run_iteration(
 
 def run_experiment(
     counts: List[int],
-    source: str = "all",
     overlap: str = "nested",
     setting: int = 1,
     feedback_mode: str = "F1",
@@ -207,7 +271,7 @@ def run_experiment(
     k: int = 3,
     num_iterations: int = 3,
     num_discussion_rounds: int = 1,
-    discussion_order: str = "random",
+    discussion_order: str = "ABC",
     model: str = "gpt-4o-mini",
     knowledge_seed: int = 42,
     output_dir: str = "results",
@@ -217,8 +281,7 @@ def run_experiment(
 
     Args:
         counts:             List of 3 integers — items each agent knows [A, B, C].
-        source:             Source pool: "all", "top", or "bottom".
-        overlap:            Overlap pattern: "nested", "disjoint", "O3", "O4".
+        overlap:            Overlap pattern: "nested", "disjoint", "O3", "O4", "O5".
         setting:            Experimental setting 1–4.
         feedback_mode:      Feedback mode: "F1"–"F5".
         k:                  Number of candidates per iteration.
@@ -250,7 +313,7 @@ def run_experiment(
         ]
     else:
         knowledge_assignments = generate_knowledge_assignment(
-            counts, source=source, overlap=overlap, seed=knowledge_seed
+            counts, overlap=overlap, seed=knowledge_seed
         )
 
     # ── Compute setting-dependent info ───────────────────────────────────
@@ -269,6 +332,22 @@ def run_experiment(
 
     portkey_model = config.PORTKEY_MODEL
 
+    counts_label = "-".join(str(c) for c in counts)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_id = (
+        f"c{counts_label}__{overlap}__s{setting}__fb{feedback_mode}"
+        f"__do{discussion_order}__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
+    )
+    if incorrect_pattern:
+        experiment_id += f"__inc{incorrect_pattern}"
+        if incorrect_warning:
+            experiment_id += "_warn"
+
+    # Phase 9: per-call raw prompt+output logger. Writes under
+    # results/<experiment_id>_raw/{prompts,outputs}/.
+    os.makedirs(output_dir, exist_ok=True)
+    logger = Logger(experiment_id, output_dir)
+
     agents = [
         MoonSurvivalAgent(
             agent_id=i + 1,
@@ -276,23 +355,14 @@ def run_experiment(
             client=client,
             model=portkey_model,
             num_agents=3,
+            num_discussion_rounds=num_discussion_rounds,
             team_knowledge_info=team_knowledge_info,
             leader_id=leader_id,
             knowledge_warning=incorrect_warning,
+            logger=logger,
         )
         for i in range(3)
     ]
-
-    counts_label = "-".join(str(c) for c in counts)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_id = (
-        f"c{counts_label}__{source}__{overlap}__s{setting}__fb{feedback_mode}"
-        f"__do{discussion_order}__k{k}__iter{num_iterations}__disc{num_discussion_rounds}__{timestamp}"
-    )
-    if incorrect_pattern:
-        experiment_id += f"__inc{incorrect_pattern}"
-        if incorrect_warning:
-            experiment_id += "_warn"
 
     # ── Knowledge dump ───────────────────────────────────────────────────────
     agent_labels = ["A", "B", "C"]
@@ -321,7 +391,7 @@ def run_experiment(
         print(f"\n{'#'*60}")
         print(f"  EXPERIMENT: {experiment_id}")
         print(f"  Knowledge: {format_knowledge_counts(counts)}")
-        print(f"  Source: {source}, Overlap: {overlap}, Setting: {setting}")
+        print(f"  Overlap: {overlap}, Setting: {setting}")
         print(f"  Feedback mode: {feedback_mode}")
         if incorrect_pattern:
             print(f"  Incorrect pattern: {incorrect_pattern}, Warning: {incorrect_warning}")
@@ -346,7 +416,6 @@ def run_experiment(
     experiment_log: Dict[str, Any] = {
         "experiment_id": experiment_id,
         "counts": counts,
-        "source": source,
         "overlap": overlap,
         "setting": setting,
         "feedback_mode": feedback_mode,
@@ -370,55 +439,14 @@ def run_experiment(
     prev_candidates: Optional[List[Dict[str, int]]] = None
     prev_scores: Optional[List[int]] = None
 
-    # For F4/F5: accumulate all candidates and scores across iterations
-    all_candidates_history: List[Dict[str, int]] = []
-    all_scores_history: List[int] = []
-
-    # Determine feedback frequency for F1-F3
-    feedback_frequency = {"F1": 1, "F2": 2, "F3": 4}.get(feedback_mode, 1)
-
-    # Determine results context label
-    if feedback_mode in ("F1", "F2", "F3"):
-        results_context = "the previous iteration"
-    elif feedback_mode == "F4":
-        results_context = "all prior iterations"
-    elif feedback_mode == "F5":
-        results_context = "all prior iterations (showing top 8 candidates only)"
-    else:
-        results_context = "the previous iteration"
+    feedback_frequency = {"F1": 1, "F2": 2, "F3": 4}[feedback_mode]
+    results_context = "the previous iteration"
 
     for it in range(1, num_iterations + 1):
         # ── Determine what feedback to pass this iteration ──
-        if feedback_mode in ("F1", "F2", "F3"):
-            if it == 1:
-                iter_candidates = None
-                iter_scores = None
-            elif it % feedback_frequency == 0:
-                iter_candidates = prev_candidates
-                iter_scores = prev_scores
-            else:
-                iter_candidates = None
-                iter_scores = None
-
-        elif feedback_mode == "F4":
-            if all_candidates_history:
-                iter_candidates = list(all_candidates_history)
-                iter_scores = list(all_scores_history)
-            else:
-                iter_candidates = None
-                iter_scores = None
-
-        elif feedback_mode == "F5":
-            if all_candidates_history:
-                paired = list(zip(all_scores_history, all_candidates_history))
-                paired.sort(key=lambda x: x[0])
-                top_8 = paired[:8]
-                iter_scores = [s for s, _ in top_8]
-                iter_candidates = [c for _, c in top_8]
-            else:
-                iter_candidates = None
-                iter_scores = None
-
+        if it == 1 or it % feedback_frequency != 0:
+            iter_candidates = None
+            iter_scores = None
         else:
             iter_candidates = prev_candidates
             iter_scores = prev_scores
@@ -430,20 +458,14 @@ def run_experiment(
             previous_candidates=iter_candidates,
             previous_scores=iter_scores,
             num_discussion_rounds=num_discussion_rounds,
-            discussion_seed=knowledge_seed + it,
             discussion_order=discussion_order,
             results_context=results_context,
             verbose=verbose,
         )
         experiment_log["iterations"].append(iter_log)
 
-        # Update tracking
         prev_candidates = final_candidates
         prev_scores = final_scores
-
-        # Accumulate for F4/F5
-        all_candidates_history.extend(final_candidates)
-        all_scores_history.extend(final_scores)
 
     # ── Build iteration summary ──────────────────────────────────────────────
     iteration_summary = []

@@ -9,6 +9,7 @@ Run:
     python verify_plumbing.py
 """
 
+import os
 import sys
 from moon_survival_env import (
     ITEMS,
@@ -123,7 +124,7 @@ for i in range(3):
     check(len(cfg3[i]) == 2, "Config 3: Agent {0} -> 2 items (got {1})".format(i, len(cfg3[i])))
 
 # 13. Nested overlap: A ⊆ B ⊆ C
-nested = generate_knowledge_assignment([1, 2, 3], "all", "nested", seed=42)
+nested = generate_knowledge_assignment([1, 2, 3], "nested", seed=42)
 items_a = set(item for item, _, _ in nested[0])
 items_b = set(item for item, _, _ in nested[1])
 items_c = set(item for item, _, _ in nested[2])
@@ -131,7 +132,7 @@ check(items_a <= items_b, "Nested: A ⊆ B")
 check(items_b <= items_c, "Nested: B ⊆ C")
 
 # 14. Disjoint overlap: no overlap
-disjoint = generate_knowledge_assignment([1, 2, 3], "all", "disjoint", seed=42)
+disjoint = generate_knowledge_assignment([1, 2, 3], "disjoint", seed=42)
 items_a = set(item for item, _, _ in disjoint[0])
 items_b = set(item for item, _, _ in disjoint[1])
 items_c = set(item for item, _, _ in disjoint[2])
@@ -148,18 +149,6 @@ check(a1 == a2, "Same counts+seed -> identical knowledge")
 a1_seed1 = generate_knowledge_assignment([2, 2, 2], seed=1)
 a1_seed2 = generate_knowledge_assignment([2, 2, 2], seed=2)
 check(a1_seed1 != a1_seed2, "Different seeds -> different knowledge sets")
-
-# 17. Source filtering — top
-top = generate_knowledge_assignment([2, 2, 4], "top", "disjoint", seed=42)
-for i, agent_know in enumerate(top):
-    for item, rank, _ in agent_know:
-        check(rank <= 8, "Source=top: Agent {0} item '{1}' rank {2} <= 8".format(i, item, rank))
-
-# 18. Source filtering — bottom
-bottom = generate_knowledge_assignment([2, 2, 4], "bottom", "disjoint", seed=42)
-for i, agent_know in enumerate(bottom):
-    for item, rank, _ in agent_know:
-        check(rank >= 8, "Source=bottom: Agent {0} item '{1}' rank {2} >= 8".format(i, item, rank))
 
 # 19. format_knowledge_for_prompt for empty
 prompt_none = format_knowledge_for_prompt([])
@@ -195,7 +184,7 @@ agent_s1 = MoonSurvivalAgent(
     team_knowledge_info=None,
     leader_id=None,
 )
-prompt_s1 = agent_s1._system_prompt()
+prompt_s1 = agent_s1._static_context()
 check("TEAM INFORMATION" not in prompt_s1, "Setting 1: no team info in prompt")
 check("TEAM ROLE" not in prompt_s1, "Setting 1: no leader in prompt")
 
@@ -209,7 +198,7 @@ agent_s2 = MoonSurvivalAgent(
     team_knowledge_info={"A": 0, "B": 2, "C": 4},
     leader_id=None,
 )
-prompt_s2 = agent_s2._system_prompt()
+prompt_s2 = agent_s2._static_context()
 check("TEAM INFORMATION" in prompt_s2, "Setting 2: team info present")
 check("TEAM ROLE" not in prompt_s2, "Setting 2: no leader in prompt")
 check("Agent A" in prompt_s2 and "0" in prompt_s2, "Setting 2: Agent A count in prompt")
@@ -225,7 +214,7 @@ agent_s3 = MoonSurvivalAgent(
     team_knowledge_info=None,
     leader_id=3,
 )
-prompt_s3 = agent_s3._system_prompt()
+prompt_s3 = agent_s3._static_context()
 check("TEAM INFORMATION" not in prompt_s3, "Setting 3: no team info")
 check("TEAM ROLE" in prompt_s3, "Setting 3: leader present")
 check("Agent C" in prompt_s3 and "leader" in prompt_s3.lower(), "Setting 3: Agent C is leader")
@@ -240,7 +229,7 @@ agent_s4 = MoonSurvivalAgent(
     team_knowledge_info={"A": 0, "B": 2, "C": 4},
     leader_id=3,
 )
-prompt_s4 = agent_s4._system_prompt()
+prompt_s4 = agent_s4._static_context()
 check("TEAM INFORMATION" in prompt_s4, "Setting 4: team info present")
 check("TEAM ROLE" in prompt_s4, "Setting 4: leader present")
 
@@ -260,6 +249,151 @@ s4_sections = extract_setting_sections(prompt_s4)
 for bad_phrase in ["defer to", "act based on", "follow the leader", "consider this when", "use this information"]:
     check(bad_phrase not in s2_sections, "Setting 2: no instructional phrase '{0}' in team sections".format(bad_phrase))
     check(bad_phrase not in s4_sections, "Setting 4: no instructional phrase '{0}' in team sections".format(bad_phrase))
+
+# 28. Leader responsibility sentence: required in Settings 3/4, absent in Settings 1/2
+leader_sentence = "The leader is responsible for guiding the discussion."
+check(leader_sentence not in prompt_s1, "Setting 1: no leader responsibility sentence")
+check(leader_sentence not in prompt_s2, "Setting 2: no leader responsibility sentence")
+check(leader_sentence in prompt_s3, "Setting 3: leader responsibility sentence present")
+check(leader_sentence in prompt_s4, "Setting 4: leader responsibility sentence present")
+
+# 29. Consensus sentence (TEAM PROCESS) is in every setting, count templated
+consensus_marker = "aim to reach a consensus through"
+for label, p in [("S1", prompt_s1), ("S2", prompt_s2), ("S3", prompt_s3), ("S4", prompt_s4)]:
+    check("TEAM PROCESS" in p, "{0}: TEAM PROCESS section present".format(label))
+    check(consensus_marker in p, "{0}: consensus sentence present".format(label))
+
+# 30. num_discussion_rounds is interpolated into the consensus sentence
+agent_rounds = MoonSurvivalAgent(
+    agent_id=1,
+    knowledge=[],
+    client=None,
+    model="test",
+    num_agents=3,
+    num_discussion_rounds=5,
+)
+prompt_rounds = agent_rounds._static_context()
+check("through 5 rounds of discussion" in prompt_rounds, "num_discussion_rounds=5 templated into prompt")
+
+# ── Phase 9: per-phase system prompts ──────────────────────────────────────
+print("\n=== Phase 9: per-phase system prompts ===\n")
+
+agent_p9 = MoonSurvivalAgent(
+    agent_id=2, knowledge=[],
+    client=None, model="test", num_agents=3,
+    team_knowledge_info={"A": 0, "B": 2, "C": 4}, leader_id=3,
+)
+propose = agent_p9._propose_system_prompt()
+discuss = agent_p9._discuss_system_prompt()
+final = agent_p9._final_select_system_prompt(k=3)
+
+# Propose system prompt
+check("Each ranking must include ALL 15 items" in propose, "Propose has rule 1 stem")
+check("COMMON REASONING" in propose, "Propose has COMMON REASONING block")
+check("parachute silk" in propose, "Propose has the worked example")
+
+# Discuss system prompt
+check("Refer to candidates by their IDs" in discuss, "Discuss has rule 1 stem")
+check("real deliberation, not a ceremony" in discuss, "Discuss has deliberation language")
+check("do not defer out of politeness" in discuss, "Discuss has anti-politeness language")
+check("Do NOT output a full ranking" in discuss, "Discuss is commentary-only")
+
+# Final-select system prompt
+check("Output exactly 3 final rankings" in final, "Final has k substituted")
+check("full authority over the final submission" in final, "Final has authority language")
+
+# Propose task block: None-branch wording must be correct under F2/F3
+# non-feedback iterations too (not just true iter 1). Regression check.
+none_branch = agent_p9._propose_task_block(k=3, previous_results=None, results_context="ignored")
+lower = none_branch.lower()
+check("first iteration" not in lower, "Propose None-branch avoids 'FIRST iteration' wording")
+check("No prior results exist" not in none_branch, "Propose None-branch avoids 'No prior results exist' wording")
+check("No prior results are shown" in none_branch, "Propose None-branch uses neutral 'No prior results are shown' wording")
+
+# Shared footer present in all three
+footer_signature = "Your own prior turns appear with role=assistant"
+for name, prompt in [("propose", propose), ("discuss", discuss), ("final_select", final)]:
+    check(footer_signature in prompt, "{0} prompt has footer".format(name))
+
+# display_name derivation
+check(agent_p9.display_name == "Agent2", "display_name derived as Agent{agent_id}")
+
+# ── Phase 9: _thread_prior_turns role tagging ──────────────────────────────
+print("\n=== Phase 9: _thread_prior_turns ===\n")
+
+turns = [
+    {"agent": "Agent1", "phase": "propose", "round_num": None, "raw_output": "<A1's text>"},
+    {"agent": "Agent2", "phase": "propose", "round_num": None, "raw_output": "<MY text>"},
+    {"agent": "Agent3", "phase": "propose", "round_num": None, "raw_output": "<A3's text>"},
+]
+threaded = agent_p9._thread_prior_turns(turns)
+check(
+    threaded[0]["role"] == "user" and threaded[0].get("name") == "Agent1",
+    "Peer turn → user with name",
+)
+check(
+    threaded[1]["role"] == "assistant" and "name" not in threaded[1],
+    "Own turn → assistant, no name",
+)
+check(
+    threaded[2]["role"] == "user" and threaded[2].get("name") == "Agent3",
+    "Other peer → user with name",
+)
+
+# ── Phase 9: Logger writes expected files ───────────────────────────────────
+print("\n=== Phase 9: Logger ===\n")
+
+import tempfile
+with tempfile.TemporaryDirectory() as tmpdir:
+    from logger import Logger
+    log = Logger("test_exp", tmpdir)
+    log.save_prompt_and_output(
+        phase="propose", iteration=1, agent_name="Agent1",
+        formatted_messages="[system]\nfoo\n", response_text="bar",
+    )
+    p = os.path.join(tmpdir, "test_exp_raw", "prompts", "iter1_propose_Agent1.txt")
+    o = os.path.join(tmpdir, "test_exp_raw", "outputs", "iter1_propose_Agent1.txt")
+    check(os.path.exists(p), "Logger wrote prompt file")
+    check(os.path.exists(o), "Logger wrote output file")
+    log.save_prompt_and_output(
+        phase="discuss", iteration=2, agent_name="Agent2",
+        formatted_messages="x", response_text="y", round_num=3,
+    )
+    p2 = os.path.join(tmpdir, "test_exp_raw", "prompts", "iter2_round3_Agent2.txt")
+    check(os.path.exists(p2), "Logger uses round_num for discuss phase filenames")
+
+# ── Phase 9: parser tolerates COMMON REASONING preamble ────────────────────
+print("\n=== Phase 9: parser with COMMON REASONING preamble ===\n")
+
+from agent import _parse_k_candidates, _extract_per_candidate_reasoning
+fake_response = """COMMON REASONING:
+Some pattern-level reasoning here.
+
+CANDIDATE 1 RANKING:
+Reasoning: First candidate.
+1. Two 100-lb oxygen tanks
+2. 20 liters of water
+3. Stellar map
+4. Food concentrate
+5. Solar-powered FM receiver-transmitter
+6. 50 feet of nylon rope
+7. First aid kit with injection needles
+8. Parachute silk
+9. Self-inflating life raft
+10. Signal flares
+11. Two .45 caliber pistols
+12. One case of dehydrated milk
+13. Portable heating unit
+14. Magnetic compass
+15. Box of matches
+"""
+candidates = _parse_k_candidates(fake_response, k=1, label="CANDIDATE")
+check(len(candidates) == 1, "Parser handles COMMON REASONING preamble")
+check(len(candidates[0]) == 15, "All 15 items parsed despite preamble")
+
+reasonings = _extract_per_candidate_reasoning(fake_response, k=1)
+check(len(reasonings) == 1 and reasonings[0] == "First candidate.",
+      "Per-candidate reasoning extracted")
 
 # -- Report --
 print("\n" + "-" * 40)
